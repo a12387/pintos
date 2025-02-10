@@ -133,6 +133,18 @@ thread_tick (void)
 #endif
   else
     kernel_ticks++;
+  
+  struct list_elem *e;
+  for (e = list_begin (&all_list); e != list_end (&all_list);
+       e = list_next (e))
+    {
+      struct thread *t = list_entry (e, struct thread, allelem);
+      if (t->status == THREAD_BLOCKED && t->sleep > 0) {
+        if(--t->sleep == 0) {
+          thread_unblock(t); 
+        }
+      }
+    }
 
   /* Enforce preemption. */
   if (++thread_ticks >= TIME_SLICE)
@@ -462,6 +474,7 @@ init_thread (struct thread *t, const char *name, int priority)
   strlcpy (t->name, name, sizeof t->name);
   t->stack = (uint8_t *) t + PGSIZE;
   t->priority = priority;
+  t->sleep = 0;
   t->magic = THREAD_MAGIC;
 
   old_level = intr_disable ();
