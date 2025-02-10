@@ -252,6 +252,14 @@ thread_unblock (struct thread *t)
   list_push_back (&ready_list, &t->elem);
   t->status = THREAD_READY;
   intr_set_level (old_level);
+  if (thread_get_priority () < t->priority)
+    {
+      if (intr_context ()) 
+        intr_yield_on_return ();
+        
+      else if(strcmp(t->name, "main") != 0)
+        thread_yield();    
+    }
 }
 
 /** Returns the name of the running thread. */
@@ -347,7 +355,16 @@ thread_foreach (thread_action_func *func, void *aux)
 void
 thread_set_priority (int new_priority) 
 {
+  int old_priority = thread_current ()->priority;
   thread_current ()->priority = new_priority;
+  if (new_priority < old_priority) 
+    {
+      if (intr_context ())
+        intr_yield_on_return ();
+      
+      else 
+        thread_yield ();
+    }
 }
 
 /** Returns the current thread's priority. */
@@ -505,8 +522,28 @@ next_thread_to_run (void)
 {
   if (list_empty (&ready_list))
     return idle_thread;
-  else
-    return list_entry (list_pop_front (&ready_list), struct thread, elem);
+  else {
+    /* 
+     *  Decide next thread on priorities. 
+     */
+    struct list_elem *e;
+    struct thread *next;
+    int max_priority = -1;
+    for (e = list_begin (&ready_list); e != list_end (&ready_list);
+         e = list_next (e))
+      {
+        struct thread *t = list_entry (e, struct thread, elem);
+        if (t->priority > max_priority)
+          {
+            max_priority = t->priority;
+            next = t;
+          }
+      }
+    enum intr_level old_level = intr_disable ();
+    list_remove (&next->elem);
+    intr_set_level (old_level);
+    return next;
+  }
 }
 
 /** Completes a thread switch by activating the new thread's page
