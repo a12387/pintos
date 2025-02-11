@@ -11,9 +11,12 @@
 #include "threads/switch.h"
 #include "threads/synch.h"
 #include "threads/vaddr.h"
+#include "devices/timer.h"
 #ifdef USERPROG
 #include "userprog/process.h"
 #endif
+
+int load_avg;
 
 /** Random value for struct thread's `magic' member.
    Used to detect stack overflow.  See the big comment at the top
@@ -28,6 +31,7 @@ static struct list ready_list;
    when they are first scheduled and removed when they exit. */
 static struct list all_list;
 
+static struct list sleep_list;
 /** Idle thread. */
 static struct thread *idle_thread;
 
@@ -92,7 +96,7 @@ thread_init (void)
   lock_init (&tid_lock);
   list_init (&ready_list);
   list_init (&all_list);
-
+  list_init (&sleep_list);
   /* Set up a thread structure for the running thread. */
   initial_thread = running_thread ();
   init_thread (initial_thread, "main", PRI_DEFAULT);
@@ -105,6 +109,7 @@ thread_init (void)
 void
 thread_start (void) 
 {
+  load_avg = 0;
   /* Create the idle thread. */
   struct semaphore idle_started;
   sema_init (&idle_started, 0);
@@ -122,33 +127,76 @@ thread_start (void)
 void
 thread_tick (void) 
 {
+  int ready_threads = 0;
   struct thread *t = thread_current ();
-
+  
   /* Update statistics. */
   if (t == idle_thread)
     idle_ticks++;
-#ifdef USERPROG
-  else if (t->pagedir != NULL)
+  else {
+    #ifdef USERPROG
+    if (t->pagedir != NULL)
     user_ticks++;
-#endif
-  else
+    else
+    #endif
     kernel_ticks++;
-  
-  struct list_elem *e;
-  for (e = list_begin (&all_list); e != list_end (&all_list);
-       e = list_next (e))
-    {
-      struct thread *t = list_entry (e, struct thread, allelem);
-      if (t->status == THREAD_BLOCKED && t->sleep > 0) {
-        if(--t->sleep == 0) {
-          thread_unblock(t); 
-        }
-      }
+    
+    t->recent_cpu = FP_ADDI(t->recent_cpu, 1);
+    if(t->status == THREAD_RUNNING)
+      ready_threads = 1;
+  }
+  ready_threads += list_size (&ready_list);
+  if(thread_mlfqs && timer_ticks() % TIMER_FREQ == 0) {
+    const int fp59_60 = FP_DIV(TO_FP(59), TO_FP(60));
+    const int fp1_60 = FP_DIV(TO_FP(1), TO_FP(60));
+    load_avg = FP_ADD(FP_MUL(fp59_60, load_avg), FP_MULI(fp1_60, ready_threads));
+    struct list_elem *e;
+    for(e = list_begin (&all_list); e != list_end(&all_list); e = list_next(e)) {
+      struct thread *et = list_entry (e, struct thread, allelem);
+      et->recent_cpu = 
+      FP_ADDI(
+        FP_MUL(
+          FP_DIV(
+            FP_MULI(load_avg, 2), 
+            FP_ADDI(FP_MULI(load_avg, 2), 1)
+          ), 
+          et->recent_cpu
+        ), 
+        et->nice
+      );
     }
-
+  }
+  
+  thread_ticks++;
+  struct list_elem *e;
+  for (e = list_begin (&sleep_list); e != list_end (&sleep_list);)
+    {
+      struct thread *et = list_entry (e, struct thread, elem);
+      e = list_next(e);
+      if (et->wake_tick <= timer_ticks ())
+        {
+          list_pop_front (&sleep_list);
+          thread_unblock (et);
+        }
+      else 
+        break;
+    }
+    
+  if(thread_mlfqs && thread_ticks >= TIME_SLICE) {
+    for (e = list_begin (&all_list); e != list_end (&all_list);
+         e = list_next (e))
+      {
+        struct thread *et = list_entry (e, struct thread, allelem);
+        et->priority = (4 * PRI_MAX - et->recent_cpu - 8 * et->nice) / 4;
+        if(et->priority > PRI_MAX) et->priority = PRI_MAX;
+        else if (et->priority < PRI_MIN) et->priority = PRI_MIN;
+      }
+  }
   /* Enforce preemption. */
-  if (++thread_ticks >= TIME_SLICE)
+  if (thread_ticks >= TIME_SLICE) {
     intr_yield_on_return ();
+    
+  }
 }
 
 /** Prints thread statistics. */
@@ -185,14 +233,21 @@ thread_create (const char *name, int priority,
   tid_t tid;
 
   ASSERT (function != NULL);
-
   /* Allocate thread. */
   t = palloc_get_page (PAL_ZERO);
   if (t == NULL)
-    return TID_ERROR;
-
+  return TID_ERROR;
+  
   /* Initialize thread. */
   init_thread (t, name, priority);
+  if(thread_mlfqs) {
+    struct thread *cur = thread_current ();
+    t->recent_cpu = cur->recent_cpu;
+    t->nice = cur->nice;
+    t->priority = (4 * PRI_MAX - t->recent_cpu - 8 * t->nice) / 4;
+    if(t->priority > PRI_MAX) t->priority = PRI_MAX;
+    else if (t->priority < PRI_MIN) t->priority = PRI_MIN;
+  }
   tid = t->tid = allocate_tid ();
 
   /* Stack frame for kernel_thread(). */
@@ -376,34 +431,62 @@ thread_get_priority (void)
 
 /** Sets the current thread's nice value to NICE. */
 void
-thread_set_nice (int nice UNUSED) 
+thread_set_nice (int nice) 
 {
-  /* Not yet implemented. */
+  ASSERT (thread_mlfqs);
+  struct thread *t = thread_current();
+  t->nice = nice;
+  int old_priority = t->priority;
+  t->priority = (4 * PRI_MAX - t->recent_cpu - 8 * t->nice) / 4;
+  if(t->priority > PRI_MAX) t->priority = PRI_MAX;
+  else if (t->priority < PRI_MIN) t->priority = PRI_MIN; 
+  if(old_priority > t->priority) {
+    if(intr_context())
+      intr_yield_on_return();
+    else 
+      thread_yield ();
+  }
 }
 
 /** Returns the current thread's nice value. */
 int
 thread_get_nice (void) 
 {
-  /* Not yet implemented. */
-  return 0;
+  return thread_current ()->nice;
 }
 
 /** Returns 100 times the system load average. */
 int
 thread_get_load_avg (void) 
 {
-  /* Not yet implemented. */
-  return 0;
+  return TO_I32_RTN(FP_MULI(load_avg, 100));
 }
 
 /** Returns 100 times the current thread's recent_cpu value. */
 int
 thread_get_recent_cpu (void) 
 {
-  /* Not yet implemented. */
-  return 0;
+  return TO_I32_RTN(FP_MULI(thread_current ()->recent_cpu, 100));
 }
+
+void
+thread_sleep (int64_t wake_tick)
+{
+  struct thread *t = thread_current ();
+  t->wake_tick = wake_tick;
+  list_insert_ordered (&sleep_list, &t->elem, thread_sleep_less, NULL);
+  thread_block();
+}
+
+bool 
+thread_sleep_less (const struct list_elem *a, const struct list_elem *b,
+                   void *aux UNUSED)
+{
+  const struct thread *a_ = list_entry(a, struct thread, elem);
+  const struct thread *b_ = list_entry(b, struct thread, elem);
+  return a_->wake_tick < b_->wake_tick;
+}
+
 
 /** Idle thread.  Executes when no other thread is ready to run.
 
@@ -491,7 +574,9 @@ init_thread (struct thread *t, const char *name, int priority)
   strlcpy (t->name, name, sizeof t->name);
   t->stack = (uint8_t *) t + PGSIZE;
   t->priority = priority;
-  t->sleep = 0;
+  t->recent_cpu = 0;
+  t->nice = 0;
+  t->wake_tick = 0;
   t->magic = THREAD_MAGIC;
 
   old_level = intr_disable ();
