@@ -150,21 +150,7 @@ thread_tick (void)
     const int fp59_60 = FP_DIV(TO_FP(59), TO_FP(60));
     const int fp1_60 = FP_DIV(TO_FP(1), TO_FP(60));
     load_avg = FP_ADD(FP_MUL(fp59_60, load_avg), FP_MULI(fp1_60, ready_threads));
-    struct list_elem *e;
-    for(e = list_begin (&all_list); e != list_end(&all_list); e = list_next(e)) {
-      struct thread *et = list_entry (e, struct thread, allelem);
-      et->recent_cpu = 
-      FP_ADDI(
-        FP_MUL(
-          FP_DIV(
-            FP_MULI(load_avg, 2), 
-            FP_ADDI(FP_MULI(load_avg, 2), 1)
-          ), 
-          et->recent_cpu
-        ), 
-        et->nice
-      );
-    }
+    thread_foreach(thread_set_recent_cpu, NULL); 
   }
   
   thread_ticks++;
@@ -183,14 +169,7 @@ thread_tick (void)
     }
     
   if(thread_mlfqs && thread_ticks >= TIME_SLICE) {
-    for (e = list_begin (&all_list); e != list_end (&all_list);
-         e = list_next (e))
-      {
-        struct thread *et = list_entry (e, struct thread, allelem);
-        et->priority = (4 * PRI_MAX - et->recent_cpu - 8 * et->nice) / 4;
-        if(et->priority > PRI_MAX) et->priority = PRI_MAX;
-        else if (et->priority < PRI_MIN) et->priority = PRI_MIN;
-      }
+    thread_foreach(thread_set_priority_mlfqs, NULL); 
   }
   /* Enforce preemption. */
   if (thread_ticks >= TIME_SLICE) {
@@ -244,9 +223,7 @@ thread_create (const char *name, int priority,
     struct thread *cur = thread_current ();
     t->recent_cpu = cur->recent_cpu;
     t->nice = cur->nice;
-    t->priority = (4 * PRI_MAX - t->recent_cpu - 8 * t->nice) / 4;
-    if(t->priority > PRI_MAX) t->priority = PRI_MAX;
-    else if (t->priority < PRI_MIN) t->priority = PRI_MIN;
+    thread_set_priority_mlfqs(t, NULL);
   }
   tid = t->tid = allocate_tid ();
 
@@ -410,16 +387,18 @@ thread_foreach (thread_action_func *func, void *aux)
 void
 thread_set_priority (int new_priority) 
 {
-  int old_priority = thread_current ()->priority;
-  thread_current ()->priority = new_priority;
-  if (new_priority < old_priority) 
-    {
-      if (intr_context ())
-        intr_yield_on_return ();
-      
-      else 
-        thread_yield ();
-    }
+  if(!thread_mlfqs) {
+    int old_priority = thread_current ()->priority;
+    thread_current ()->priority = new_priority;
+    if (new_priority < old_priority) 
+      {
+        if (intr_context ())
+          intr_yield_on_return ();
+        
+        else 
+          thread_yield ();
+      }
+  }
 }
 
 /** Returns the current thread's priority. */
@@ -437,9 +416,7 @@ thread_set_nice (int nice)
   struct thread *t = thread_current();
   t->nice = nice;
   int old_priority = t->priority;
-  t->priority = (4 * PRI_MAX - t->recent_cpu - 8 * t->nice) / 4;
-  if(t->priority > PRI_MAX) t->priority = PRI_MAX;
-  else if (t->priority < PRI_MIN) t->priority = PRI_MIN; 
+  thread_set_priority_mlfqs(t, NULL); 
   if(old_priority > t->priority) {
     if(intr_context())
       intr_yield_on_return();
@@ -485,6 +462,30 @@ thread_sleep_less (const struct list_elem *a, const struct list_elem *b,
   const struct thread *a_ = list_entry(a, struct thread, elem);
   const struct thread *b_ = list_entry(b, struct thread, elem);
   return a_->wake_tick < b_->wake_tick;
+}
+
+void
+thread_set_priority_mlfqs(struct thread *t, void *aux UNUSED)
+{
+  t->priority = (4 * PRI_MAX - t->recent_cpu - 8 * t->nice) / 4;
+  if(t->priority > PRI_MAX) t->priority = PRI_MAX;
+  else if(t->priority < PRI_MIN) t->priority = PRI_MIN;
+}
+
+void
+thread_set_recent_cpu(struct thread *t, void *aux UNUSED)
+{
+  t->recent_cpu = 
+  FP_ADDI(
+    FP_MUL(
+      FP_DIV(
+        FP_MULI(load_avg, 2), 
+        FP_ADDI(FP_MULI(load_avg, 2), 1)
+      ), 
+      t->recent_cpu
+    ), 
+    t->nice
+  );
 }
 
 
