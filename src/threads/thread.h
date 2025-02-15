@@ -161,6 +161,8 @@ int thread_get_load_avg (void);
 void thread_sleep (int64_t);
 bool thread_sleep_less (const struct list_elem *, const struct list_elem *,
                         void *aux UNUSED);
+bool thread_priority_less (const struct list_elem *, const struct list_elem *,
+                           void *aux UNUSED);
 void thread_set_priority_mlfqs(struct thread *, void *aux UNUSED);
 void thread_set_recent_cpu(struct thread *, void *aux UNUSED);
 #endif /**< threads/thread.h */
