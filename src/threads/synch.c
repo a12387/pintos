@@ -109,14 +109,20 @@ void
 sema_up (struct semaphore *sema) 
 {
   enum intr_level old_level;
-
+  struct thread *relse;
+  bool yield = false;
   ASSERT (sema != NULL);
 
   old_level = intr_disable ();
-  if (!list_empty (&sema->waiters)) 
-    thread_unblock (list_entry (list_pop_front (&sema->waiters),
-                                struct thread, elem));
+  if (!list_empty (&sema->waiters)) {
+    relse = list_entry(list_pop_front(&sema->waiters), struct thread, elem);
+    thread_unblock (relse);
+    if(relse->priority > thread_current()->priority)
+      yield = true;
+  }
   sema->value++;
+  if(yield)
+    thread_yield();
   intr_set_level (old_level);
 }
 

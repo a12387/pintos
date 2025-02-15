@@ -15,7 +15,10 @@
 #ifdef USERPROG
 #include "userprog/process.h"
 #endif
-
+const int fp59_60 = FP_DIV(TO_FP(59), TO_FP(60));
+const int fp1_60 = FP_DIV(TO_FP(1), TO_FP(60));
+const int fp1_4 = FP_DIV(TO_FP(1), TO_FP(4));
+const int fp_pri_max = TO_FP(PRI_MAX);
 int load_avg;
 
 /** Random value for struct thread's `magic' member.
@@ -141,7 +144,6 @@ thread_tick (void)
     #endif
     kernel_ticks++;
     
-    t->recent_cpu = FP_ADDI(t->recent_cpu, 1);
   }
   
   thread_ticks++;
@@ -165,10 +167,11 @@ thread_tick (void)
     break;
   }
   if(thread_mlfqs) {
-    if(t != idle_thread)
-      ready_threads = 1;
-    ready_threads += list_size (&ready_list);
+    t->recent_cpu = FP_ADDI(t->recent_cpu, 1);
     if(timer_ticks() % TIMER_FREQ == 0) {
+      if(t != idle_thread)
+        ready_threads = 1;
+      ready_threads += list_size (&ready_list);
       const int fp59_60 = FP_DIV(TO_FP(59), TO_FP(60));
       const int fp1_60 = FP_DIV(TO_FP(1), TO_FP(60));
       load_avg = FP_ADD(FP_MUL(fp59_60, load_avg), FP_MULI(fp1_60, ready_threads));
@@ -423,12 +426,7 @@ thread_set_nice (int nice)
   struct thread *t = thread_current();
   t->nice = nice;
   thread_set_priority_mlfqs(t, NULL); 
-  // if(old_priority > t->priority) {
-  //   if(intr_context())
-  //     intr_yield_on_return();
-  //   else 
-      thread_yield ();
-  // }
+  thread_yield ();
 }
 
 /** Returns the current thread's nice value. */
@@ -487,8 +485,7 @@ thread_set_priority_mlfqs(struct thread *t, void *aux UNUSED)
 {
   if(t == idle_thread)
     return;
-  const int fp1_4 = FP_DIV(TO_FP(1), TO_FP(4));
-  const int fp_pri_max = TO_FP(PRI_MAX);
+
   t->priority = 
   TO_I32_RT0(
     FP_SUB(
@@ -648,6 +645,9 @@ next_thread_to_run (void)
      *  The last element of ready_list has the highest priority,
      *  and due to the implemention of list_insert_ordered, the chosen
      *  thread will be the last recent running one, satisfying round-robin.
+     *  
+     *  But in fact, it's not guaranteed to choose the thread with highest priority,
+     *  since priority can be modified in set_priority without changing the list. 
      */
     return list_entry(list_pop_back(&ready_list), struct thread, elem);
   }
