@@ -32,6 +32,9 @@
 #include "threads/interrupt.h"
 #include "threads/thread.h"
 
+#define MIN(a,b) ((a) < (b) ? (a) : (b))
+static bool
+cond_priority_less(const struct list_elem *a_, const struct list_elem *b_, void *aux UNUSED);
 /** Initializes semaphore SEMA to VALUE.  A semaphore is a
    nonnegative integer along with two atomic operators for
    manipulating it:
@@ -115,6 +118,8 @@ sema_up (struct semaphore *sema)
 
   old_level = intr_disable ();
   if (!list_empty (&sema->waiters)) {
+    if(!thread_mlfqs)
+      list_sort(&sema->waiters, thread_priority_less, NULL);
     relse = list_entry(list_pop_front(&sema->waiters), struct thread, elem);
     thread_unblock (relse);
     if(relse->priority > thread_current()->priority)
@@ -182,7 +187,8 @@ void
 lock_init (struct lock *lock)
 {
   ASSERT (lock != NULL);
-
+  lock->origin_priority = -1;
+  lock->donate_priority = -1;
   lock->holder = NULL;
   sema_init (&lock->semaphore, 1);
 }
@@ -202,8 +208,37 @@ lock_acquire (struct lock *lock)
   ASSERT (!intr_context ());
   ASSERT (!lock_held_by_current_thread (lock));
 
-  sema_down (&lock->semaphore);
-  lock->holder = thread_current ();
+  struct thread *cur = thread_current();
+  struct thread *holder = lock->holder;
+  if(thread_mlfqs) {
+    sema_down(&lock->semaphore);
+    lock->holder = cur;
+    return;
+  }
+  if(sema_try_down(&lock->semaphore)) {
+    lock->holder = cur;
+  } else {
+    cur->waiting = lock;
+    if(holder != NULL && cur->priority > holder->priority) {
+      if(lock->origin_priority == -1) {
+        lock->origin_priority = holder->priority;
+        holder->priority_restore = holder->priority;
+      }
+      lock->donate_priority = cur->priority;
+      holder->priority = cur->priority;
+      holder->donate++;
+      struct lock *nest = holder->waiting;
+      while(nest != NULL) {
+        if(nest->holder->priority > holder->priority)
+          break;
+        nest->holder->priority = holder->priority;
+        nest->donate_priority = holder->priority;
+        nest = nest->holder->waiting;
+      }
+    }
+    sema_down (&lock->semaphore);
+    lock->holder = cur;
+  }
 }
 
 /** Tries to acquires LOCK and returns true if successful or false
@@ -237,6 +272,22 @@ lock_release (struct lock *lock)
   ASSERT (lock != NULL);
   ASSERT (lock_held_by_current_thread (lock));
 
+  struct thread *holder = lock->holder;
+  if(!thread_mlfqs) {
+    if(lock->donate_priority != -1) {
+      if(holder->priority > lock->donate_priority) {
+        holder->priority_restore = MIN(holder->priority_restore, lock->origin_priority);
+      } else if (holder->priority == lock->donate_priority) {
+        holder->priority = MIN(holder->priority_restore, lock->origin_priority);
+      }
+      holder->donate--;
+      if(holder->donate == 0) {
+        holder->priority_restore = -1;
+      }
+    }
+    lock->donate_priority = -1;
+    lock->origin_priority = -1;
+  }
   lock->holder = NULL;
   sema_up (&lock->semaphore);
 }
@@ -322,9 +373,11 @@ cond_signal (struct condition *cond, struct lock *lock UNUSED)
   ASSERT (!intr_context ());
   ASSERT (lock_held_by_current_thread (lock));
 
-  if (!list_empty (&cond->waiters)) 
+  if (!list_empty (&cond->waiters)) {
+    list_sort(&cond->waiters, cond_priority_less, NULL);
     sema_up (&list_entry (list_pop_front (&cond->waiters),
                           struct semaphore_elem, elem)->semaphore);
+  }
 }
 
 /** Wakes up all threads, if any, waiting on COND (protected by
@@ -341,4 +394,14 @@ cond_broadcast (struct condition *cond, struct lock *lock)
 
   while (!list_empty (&cond->waiters))
     cond_signal (cond, lock);
+}
+
+static bool
+cond_priority_less(const struct list_elem *a_, const struct list_elem *b_, void *aux UNUSED) 
+{
+  struct semaphore_elem *a = list_entry(a_, struct semaphore_elem, elem);
+  struct semaphore_elem *b = list_entry(b_, struct semaphore_elem, elem);
+  struct thread *_a = list_entry(list_front(&a->semaphore.waiters), struct thread, elem);
+  struct thread *_b = list_entry(list_front(&b->semaphore.waiters), struct thread, elem);
+  return _a->priority > _b->priority;
 }

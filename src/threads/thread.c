@@ -397,18 +397,24 @@ thread_foreach (thread_action_func *func, void *aux)
 void
 thread_set_priority (int new_priority) 
 {
-  if(!thread_mlfqs) {
-    int old_priority = thread_current ()->priority;
-    thread_current ()->priority = new_priority;
-    if (new_priority < old_priority) 
-      {
-        if (intr_context ())
-          intr_yield_on_return ();
-        
-        else 
-          thread_yield ();
-      }
+  if(thread_mlfqs) {
+    return;
   }
+  if(thread_current()->priority_restore != -1) {
+    thread_current()->priority_restore = new_priority;
+    return;
+  }
+  int old_priority = thread_current ()->priority;
+  thread_current ()->priority = new_priority;
+  if (new_priority < old_priority) 
+  {
+    if (intr_context ())
+      intr_yield_on_return ();
+    
+    else 
+      thread_yield ();
+  }
+  
 }
 
 /** Returns the current thread's priority. */
@@ -477,7 +483,7 @@ thread_priority_less (const struct list_elem *a, const struct list_elem *b,
 {
   const struct thread *a_ = list_entry(a, struct thread, elem);
   const struct thread *b_ = list_entry(b, struct thread, elem);
-  return a_->priority <= b_->priority;
+  return a_->priority > b_->priority;
 }
 
 void
@@ -606,7 +612,10 @@ init_thread (struct thread *t, const char *name, int priority)
   t->status = THREAD_BLOCKED;
   strlcpy (t->name, name, sizeof t->name);
   t->stack = (uint8_t *) t + PGSIZE;
+  t->donate = 0;
   t->priority = priority;
+  t->priority_restore = -1;
+  t->waiting = NULL;
   t->recent_cpu = 0;
   t->nice = 0;
   t->wake_tick = 0;
@@ -649,7 +658,7 @@ next_thread_to_run (void)
      *  But in fact, it's not guaranteed to choose the thread with highest priority,
      *  since priority can be modified in set_priority without changing the list. 
      */
-    return list_entry(list_pop_back(&ready_list), struct thread, elem);
+    return list_entry(list_pop_front(&ready_list), struct thread, elem);
   }
 }
 
