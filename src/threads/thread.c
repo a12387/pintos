@@ -20,7 +20,7 @@ const int fp1_60 = FP_DIV(TO_FP(1), TO_FP(60));
 const int fp1_4 = FP_DIV(TO_FP(1), TO_FP(4));
 const int fp_pri_max = TO_FP(PRI_MAX);
 int load_avg;
-
+static int last_set_pri;
 /** Random value for struct thread's `magic' member.
    Used to detect stack overflow.  See the big comment at the top
    of thread.h for details. */
@@ -100,6 +100,7 @@ thread_init (void)
   list_init (&ready_list);
   list_init (&all_list);
   list_init (&sleep_list);
+  last_set_pri = 0;
   /* Set up a thread structure for the running thread. */
   initial_thread = running_thread ();
   init_thread (initial_thread, "main", PRI_DEFAULT);
@@ -176,9 +177,6 @@ thread_tick (void)
       const int fp1_60 = FP_DIV(TO_FP(1), TO_FP(60));
       load_avg = FP_ADD(FP_MUL(fp59_60, load_avg), FP_MULI(fp1_60, ready_threads));
       thread_foreach(thread_set_recent_cpu, NULL); 
-    }
-    if(timer_ticks() % 4 == 0) {
-      thread_foreach(thread_set_priority_mlfqs, NULL); 
     }
   }
 }
@@ -291,6 +289,7 @@ thread_unblock (struct thread *t)
   old_level = intr_disable ();
   ASSERT (t->status == THREAD_BLOCKED); 
   list_insert_ordered (&ready_list, &t->elem, thread_priority_less, NULL);
+  t->ready = true;
   t->status = THREAD_READY;
   intr_set_level (old_level);
   // if (thread_get_priority () < t->priority)
@@ -366,10 +365,15 @@ thread_yield (void)
   enum intr_level old_level;
   
   ASSERT (!intr_context ());
-
+  
   old_level = intr_disable ();
+  if(thread_mlfqs && timer_ticks() - last_set_pri >= 4) {
+    thread_foreach(thread_set_priority_mlfqs, NULL); 
+    last_set_pri = timer_ticks();
+  }
   if (cur != idle_thread) {
       list_insert_ordered (&ready_list, &cur->elem, thread_priority_less, NULL);
+      cur->ready = true;
   }
   cur->status = THREAD_READY;
   schedule ();
@@ -400,12 +404,19 @@ thread_set_priority (int new_priority)
   if(thread_mlfqs) {
     return;
   }
-  if(thread_current()->priority_restore != -1) {
-    thread_current()->priority_restore = new_priority;
+  struct thread *t = thread_current();
+  if(t->priority_restore != -1) {
+    t->priority_restore = new_priority;
     return;
   }
-  int old_priority = thread_current ()->priority;
-  thread_current ()->priority = new_priority;
+  int old_priority = t->priority;
+  enum intr_level old_level = intr_disable();
+  t->priority = new_priority;
+  if(t->ready) {
+    list_remove(&t->elem);
+    list_insert_ordered(&ready_list, &t->elem, thread_priority_less, NULL);
+  }
+  intr_set_level(old_level);
   if (new_priority < old_priority) 
   {
     if (intr_context ())
@@ -432,6 +443,7 @@ thread_set_nice (int nice)
   struct thread *t = thread_current();
   t->nice = nice;
   thread_set_priority_mlfqs(t, NULL); 
+  list_sort(&ready_list, thread_priority_less, NULL);
   thread_yield ();
 }
 
@@ -507,6 +519,7 @@ thread_set_priority_mlfqs(struct thread *t, void *aux UNUSED)
   );
   if(t->priority > PRI_MAX) t->priority = PRI_MAX;
   else if(t->priority < PRI_MIN) t->priority = PRI_MIN;
+  
 }
 
 void
@@ -612,6 +625,7 @@ init_thread (struct thread *t, const char *name, int priority)
   t->status = THREAD_BLOCKED;
   strlcpy (t->name, name, sizeof t->name);
   t->stack = (uint8_t *) t + PGSIZE;
+  t->ready = false;
   t->donate = 0;
   t->priority = priority;
   t->priority_restore = -1;
@@ -658,7 +672,9 @@ next_thread_to_run (void)
      *  But in fact, it's not guaranteed to choose the thread with highest priority,
      *  since priority can be modified in set_priority without changing the list. 
      */
-    return list_entry(list_pop_front(&ready_list), struct thread, elem);
+    struct thread *ret = list_entry(list_pop_front(&ready_list), struct thread, elem);
+    ret->ready = false;
+    return ret;
   }
 }
 
