@@ -17,7 +17,8 @@
 #include "threads/palloc.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
-
+#include "threads/malloc.h"
+struct lock file_lock;
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
 
@@ -28,20 +29,29 @@ static bool load (const char *cmdline, void (**eip) (void), void **esp);
 tid_t
 process_execute (const char *file_name) 
 {
+  ASSERT (strlen(file_name) < 256);
   char *fn_copy;
   tid_t tid;
+  struct semaphore *sema = malloc(sizeof (struct semaphore));
 
+  sema_init(sema, 0);
   /* Make a copy of FILE_NAME.
      Otherwise there's a race between the caller and load(). */
   fn_copy = palloc_get_page (0);
   if (fn_copy == NULL)
     return TID_ERROR;
-  strlcpy (fn_copy, file_name, PGSIZE);
+  strlcpy (fn_copy, file_name, 256);
+
+  *(struct semaphore **)(fn_copy + 256) = sema;
 
   /* Create a new thread to execute FILE_NAME. */
   tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
-  if (tid == TID_ERROR)
+  if (tid == TID_ERROR) {
     palloc_free_page (fn_copy); 
+    sema_up(sema);
+  }
+  sema_down(sema);
+  free(sema);
   return tid;
 }
 
@@ -51,20 +61,74 @@ static void
 start_process (void *file_name_)
 {
   char *file_name = file_name_;
+  struct semaphore * sema = *(struct semaphore **)(file_name_ + 256);
   struct intr_frame if_;
   bool success;
 
+  // parsing args
+  int argc = 0;
+  int len = strlen(file_name) + 1;
+  bool consecutive_space = false;
+  int cur = 0;
+  for(int i = 0; i < len; i++) {
+    if(file_name[i] != ' ') {
+      if(file_name[i] == '\0') {
+        if(file_name[cur - 1] == '\0')
+          continue;
+        else
+          argc++;
+      }
+      file_name[cur++] = file_name[i];
+      consecutive_space = false;
+    } else if (!consecutive_space) {
+      consecutive_space = true;
+      file_name[cur++] = '\0';
+      argc++;
+    }
+  } 
+  
   /* Initialize interrupt frame and load executable. */
   memset (&if_, 0, sizeof if_);
   if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG;
   if_.cs = SEL_UCSEG;
   if_.eflags = FLAG_IF | FLAG_MBS;
+  lock_acquire(&file_lock);
   success = load (file_name, &if_.eip, &if_.esp);
-
+  lock_release(&file_lock);
+  sema_up(sema);
   /* If load failed, quit. */
+  if (!success) {
+    thread_exit();
+  } 
+  
+  char *t = pagedir_get_page(thread_current()->pagedir, if_.esp - PGSIZE);
+  int offset = PGSIZE;
+
+  offset -= cur;
+  memcpy(t + offset, file_name, cur);
+  // align and argv[argc]
+  int pad = cur & BITMASK(0, 2);
+  offset -= pad + 4;
+  memset(t + offset, 0, pad + 4);
+
+  char **t_ = (char **)(t + offset);
+  t_ -= argc;
+  for(int i = 0; i < argc; i++) {
+    t_[i] = (if_.esp - cur);
+    len = strlen(file_name);
+    cur -= len + 1;
+    file_name += len + 1;
+  }
+  offset -= 4 * argc ;
+  t_ -= 3;
+  t_[0] = 0;
+  t_[1] = (char *)argc;
+  t_[2] = (if_.esp - PGSIZE + offset);
+  offset -= 12;
+  if_.esp -= PGSIZE - offset;
+
+  file_name = (char *)((int)file_name & BITMASK(0, 12));
   palloc_free_page (file_name);
-  if (!success) 
-    thread_exit ();
 
   /* Start the user process by simulating a return from an
      interrupt, implemented by intr_exit (in
@@ -86,8 +150,28 @@ start_process (void *file_name_)
    This function will be implemented in problem 2-2.  For now, it
    does nothing. */
 int
-process_wait (tid_t child_tid UNUSED) 
+process_wait (tid_t child_tid) 
 {
+  struct thread *t = thread_current();
+  int ret = 0;
+  for(struct list_elem *e = list_begin(&t->children); e != list_end (&t->children); e = list_next(e)) {
+    struct child_info *info = list_entry(e, struct child_info, elem);
+    if(info->tid != child_tid)
+      continue;
+    
+    // waited
+    if(info->waited)
+      return -1;
+    info->waited = true;
+    // block and wait for child exiting
+    sema_down(&info->wait_sema);
+    ret = info->exit_status;
+    list_remove(e);
+    free(info);
+    return ret;
+  }  
+
+  // no such child with given tid
   return -1;
 }
 

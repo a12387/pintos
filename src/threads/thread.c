@@ -12,6 +12,7 @@
 #include "threads/synch.h"
 #include "threads/vaddr.h"
 #include "devices/timer.h"
+#include "threads/malloc.h"
 #ifdef USERPROG
 #include "userprog/process.h"
 #endif
@@ -100,6 +101,9 @@ thread_init (void)
   list_init (&ready_list);
   list_init (&all_list);
   list_init (&sleep_list);
+  #ifdef USERPROG
+  lock_init (&file_lock);
+  #endif
   last_set_pri = 0;
   /* Set up a thread structure for the running thread. */
   initial_thread = running_thread ();
@@ -222,6 +226,13 @@ thread_create (const char *name, int priority,
   
   /* Initialize thread. */
   init_thread (t, name, priority);
+  t->info->tid = t->tid;
+  t->info->exit_status = -1; // if not exit by exit(), status is -1 by default
+  t->info->parent = thread_current();
+  sema_init (&t->info->wait_sema, 0);
+  t->info->exited = false;
+  t->info->waited = false;
+  list_push_back (&thread_current()->children, &t->info->elem);
   if(thread_mlfqs) {
     struct thread *cur = thread_current ();
     t->recent_cpu = cur->recent_cpu;
@@ -341,8 +352,25 @@ void
 thread_exit (void) 
 {
   ASSERT (!intr_context ());
-
 #ifdef USERPROG
+  struct thread *t = thread_current();
+  if(t->info->parent == NULL ) {
+    // parent has exited
+    free(t->info);
+  } else {
+    // parent may wait or not; anyway, free in parent's thread_exit()
+    sema_up(&t->info->wait_sema);
+  }
+  for(struct list_elem *e = list_begin(&t->children); e != list_end(&t->children); e = list_next(e)) {
+    struct child_info *i = list_entry(e, struct child_info, elem);
+    if(i->exited) {
+      // has exited but not been waited, and parent exits
+      e = list_remove(e)->prev;
+      free(i);
+    } else {
+      i->parent = NULL;
+    }
+  }
   process_exit ();
 #endif
 
@@ -633,6 +661,8 @@ init_thread (struct thread *t, const char *name, int priority)
   t->recent_cpu = 0;
   t->nice = 0;
   t->wake_tick = 0;
+  list_init(&t->children);
+  t->info = malloc(sizeof (struct child_info));
   t->magic = THREAD_MAGIC;
 
   old_level = intr_disable ();

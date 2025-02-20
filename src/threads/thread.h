@@ -5,6 +5,7 @@
 #include <list.h>
 #include <stdint.h>
 #include <hash.h>
+#include "threads/synch.h"
 
 #define FP_Q 14
 #define FP_P 17
@@ -31,6 +32,17 @@ enum thread_status
     THREAD_DYING        /**< About to be destroyed. */
   };
 
+struct child_info {
+  tid_t tid;
+  int exit_status;
+  struct thread *parent;
+  struct semaphore *wait_sema;
+  struct list_elem elem;
+  bool exited;
+  bool waited;
+};
+
+#define NOFILE 16
 /** Thread identifier type.
    You can redefine this to whatever type you like. */
 typedef int tid_t;
@@ -118,6 +130,11 @@ struct thread
     struct list_elem elem;              /**< List element. */
 
 #ifdef USERPROG
+    /* For wait and exit */
+    struct list children;
+    struct child_info *info;
+
+    struct file *open_file[NOFILE];
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /**< Page directory. */
 #endif
