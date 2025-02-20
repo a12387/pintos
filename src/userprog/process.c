@@ -41,16 +41,39 @@ process_execute (const char *file_name)
   if (fn_copy == NULL)
     return TID_ERROR;
   strlcpy (fn_copy, file_name, 256);
-
   *(struct semaphore **)(fn_copy + 256) = sema;
 
+  // parsing args
+  int argc = 0;
+  int len = strlen(file_name) + 1;
+  bool consecutive_space = false;
+  int cur = 0;
+  for(int i = 0; i < len; i++) {
+    if(fn_copy[i] != ' ') {
+      if(fn_copy[i] == '\0') {
+        if(fn_copy[cur - 1] == '\0')
+          continue;
+        else
+          argc++;
+      }
+      fn_copy[cur++] = fn_copy[i];
+      consecutive_space = false;
+    } else if (!consecutive_space) {
+      consecutive_space = true;
+      fn_copy[cur++] = '\0';
+      argc++;
+    }
+  } 
+  *(int *)(fn_copy + 256 + sizeof sema) = argc;
+  *(int *)(fn_copy + 256 + sizeof sema + sizeof argc) = cur;
+  *(int **)(fn_copy + 256 + sizeof sema + sizeof argc + sizeof cur) = &tid;
+  strlcpy(fn_copy + PGSIZE / 2, fn_copy, 256);
   /* Create a new thread to execute FILE_NAME. */
-  tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
+  tid = thread_create (fn_copy + PGSIZE / 2, PRI_DEFAULT, start_process, fn_copy);
+  sema_down(sema);
   if (tid == TID_ERROR) {
     palloc_free_page (fn_copy); 
-    sema_up(sema);
   }
-  sema_down(sema);
   free(sema);
   return tid;
 }
@@ -65,27 +88,10 @@ start_process (void *file_name_)
   struct intr_frame if_;
   bool success;
 
-  // parsing args
-  int argc = 0;
-  int len = strlen(file_name) + 1;
-  bool consecutive_space = false;
-  int cur = 0;
-  for(int i = 0; i < len; i++) {
-    if(file_name[i] != ' ') {
-      if(file_name[i] == '\0') {
-        if(file_name[cur - 1] == '\0')
-          continue;
-        else
-          argc++;
-      }
-      file_name[cur++] = file_name[i];
-      consecutive_space = false;
-    } else if (!consecutive_space) {
-      consecutive_space = true;
-      file_name[cur++] = '\0';
-      argc++;
-    }
-  } 
+  int argc = *(int *)(file_name_ + 256 + sizeof sema);
+  int cur = *(int *)(file_name_ + 256 + sizeof sema + sizeof argc);
+  int len;
+  int *tid_ret = *(int **)(file_name_ + 256 + sizeof sema + sizeof argc + sizeof cur);
   
   /* Initialize interrupt frame and load executable. */
   memset (&if_, 0, sizeof if_);
@@ -95,11 +101,13 @@ start_process (void *file_name_)
   lock_acquire(&file_lock);
   success = load (file_name, &if_.eip, &if_.esp);
   lock_release(&file_lock);
-  sema_up(sema);
   /* If load failed, quit. */
   if (!success) {
+    *tid_ret = -1;
+    sema_up(sema);
     thread_exit();
   } 
+  sema_up(sema);
   
   char *t = pagedir_get_page(thread_current()->pagedir, if_.esp - PGSIZE);
   int offset = PGSIZE;
@@ -107,7 +115,7 @@ start_process (void *file_name_)
   offset -= cur;
   memcpy(t + offset, file_name, cur);
   // align and argv[argc]
-  int pad = cur & BITMASK(0, 2);
+  int pad = cur & (~BITMASK(0, 2));
   offset -= pad + 4;
   memset(t + offset, 0, pad + 4);
 
@@ -127,7 +135,7 @@ start_process (void *file_name_)
   offset -= 12;
   if_.esp -= PGSIZE - offset;
 
-  file_name = (char *)((int)file_name & BITMASK(0, 12));
+  file_name = (char *)((int)file_name & (~BITMASK(0, 12)));
   palloc_free_page (file_name);
 
   /* Start the user process by simulating a return from an
@@ -187,6 +195,8 @@ process_exit (void)
   pd = cur->pagedir;
   if (pd != NULL) 
     {
+      printf("%s: exit(%d)\n", thread_name(), cur->info->exit_status);
+      file_close(cur->executable);
       /* Correct ordering here is crucial.  We must set
          cur->pagedir to NULL before switching page directories,
          so that a timer interrupt can't switch back to the
@@ -307,6 +317,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
 
   /* Open executable file. */
   file = filesys_open (file_name);
+  thread_current()->executable = file;
   if (file == NULL) 
     {
       printf ("load: %s: open failed\n", file_name);
@@ -393,10 +404,9 @@ load (const char *file_name, void (**eip) (void), void **esp)
   *eip = (void (*) (void)) ehdr.e_entry;
 
   success = true;
-
+  file_deny_write(file);
  done:
   /* We arrive here whether the load is successful or not. */
-  file_close (file);
   return success;
 }
 

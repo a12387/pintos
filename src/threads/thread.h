@@ -4,9 +4,8 @@
 #include <debug.h>
 #include <list.h>
 #include <stdint.h>
-#include <hash.h>
 #include "threads/synch.h"
-
+#include "filesys/file.h"
 #define FP_Q 14
 #define FP_P 17
 #define FP_F (1 << FP_Q)
@@ -32,16 +31,7 @@ enum thread_status
     THREAD_DYING        /**< About to be destroyed. */
   };
 
-struct child_info {
-  tid_t tid;
-  int exit_status;
-  struct thread *parent;
-  struct semaphore *wait_sema;
-  struct list_elem elem;
-  bool exited;
-  bool waited;
-};
-
+  
 #define NOFILE 16
 /** Thread identifier type.
    You can redefine this to whatever type you like. */
@@ -52,7 +42,16 @@ typedef int tid_t;
 #define PRI_MIN 0                       /**< Lowest priority. */
 #define PRI_DEFAULT 31                  /**< Default priority. */
 #define PRI_MAX 63                      /**< Highest priority. */
-
+   
+struct child_info {
+  tid_t tid;
+  int exit_status;
+  struct thread *parent;
+  struct semaphore wait_sema;
+  struct list_elem elem;
+  bool exited;
+  bool waited;
+};
 /** A kernel thread or user process.
 
    Each thread structure is stored in its own 4 kB page.  The
@@ -135,6 +134,7 @@ struct thread
     struct child_info *info;
 
     struct file *open_file[NOFILE];
+    struct file *executable;
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /**< Page directory. */
 #endif

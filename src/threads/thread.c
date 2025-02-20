@@ -226,7 +226,7 @@ thread_create (const char *name, int priority,
   
   /* Initialize thread. */
   init_thread (t, name, priority);
-  t->info->tid = t->tid;
+  t->info = malloc(sizeof (struct child_info));
   t->info->exit_status = -1; // if not exit by exit(), status is -1 by default
   t->info->parent = thread_current();
   sema_init (&t->info->wait_sema, 0);
@@ -240,6 +240,7 @@ thread_create (const char *name, int priority,
     thread_set_priority_mlfqs(t, NULL);
   }
   tid = t->tid = allocate_tid ();
+  t->info->tid = t->tid;
 
   /* Stack frame for kernel_thread(). */
   kf = alloc_frame (t, sizeof *kf);
@@ -353,7 +354,14 @@ thread_exit (void)
 {
   ASSERT (!intr_context ());
 #ifdef USERPROG
+  process_exit ();
   struct thread *t = thread_current();
+  for(int i = 0; i < NOFILE; i++) {
+    if(t->open_file[i] != NULL) {
+      file_close(t->open_file[i]);
+      t->open_file[i] = NULL;
+    }
+  }
   if(t->info->parent == NULL ) {
     // parent has exited
     free(t->info);
@@ -371,7 +379,6 @@ thread_exit (void)
       i->parent = NULL;
     }
   }
-  process_exit ();
 #endif
 
   /* Remove thread from all threads list, set our status to dying,
@@ -662,7 +669,7 @@ init_thread (struct thread *t, const char *name, int priority)
   t->nice = 0;
   t->wake_tick = 0;
   list_init(&t->children);
-  t->info = malloc(sizeof (struct child_info));
+  t->executable = NULL;
   t->magic = THREAD_MAGIC;
 
   old_level = intr_disable ();
