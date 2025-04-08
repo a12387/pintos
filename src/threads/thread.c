@@ -158,6 +158,8 @@ thread_tick (void)
     intr_yield_on_return ();
     
   }
+
+  // wake and pop threads that should wake up
   struct list_elem *e;
   for (e = list_begin (&sleep_list); e != list_end (&sleep_list);)
   {
@@ -171,9 +173,12 @@ thread_tick (void)
     else 
     break;
   }
+
+
   if(thread_mlfqs) {
     t->recent_cpu = FP_ADDI(t->recent_cpu, 1);
     if(timer_ticks() % TIMER_FREQ == 0) {
+      // update related variables
       if(t != idle_thread)
         ready_threads = 1;
       ready_threads += list_size (&ready_list);
@@ -304,14 +309,8 @@ thread_unblock (struct thread *t)
   t->ready = true;
   t->status = THREAD_READY;
   intr_set_level (old_level);
-  // if (thread_get_priority () < t->priority)
-  //   {
-  //     if (intr_context ()) 
-  //       intr_yield_on_return ();
-        
-  //     else if(strcmp(t->name, "main") != 0)
-  //       thread_yield();    
-  //   }
+  // cannot yield here! may cause deadlock or else.
+  // yield after calling this func
 }
 
 /** Returns the name of the running thread. */
@@ -402,6 +401,7 @@ thread_yield (void)
   ASSERT (!intr_context ());
   
   old_level = intr_disable ();
+  // moved from timer intr handler
   if(thread_mlfqs && timer_ticks() - last_set_pri >= 4) {
     thread_foreach(thread_set_priority_mlfqs, NULL); 
     last_set_pri = timer_ticks();
@@ -503,6 +503,7 @@ thread_get_recent_cpu (void)
   return TO_I32_RTN(FP_MULI(thread_current ()->recent_cpu, 100));
 }
 
+/** Let current thread sleep until wake_tick */
 void
 thread_sleep (int64_t wake_tick)
 {

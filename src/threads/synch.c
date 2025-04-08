@@ -118,16 +118,22 @@ sema_up (struct semaphore *sema)
 
   old_level = intr_disable ();
   if (!list_empty (&sema->waiters)) {
+    // sort before poping, make sure thread with highest priority holds the lock first.
     if(!thread_mlfqs)
       list_sort(&sema->waiters, thread_priority_less, NULL);
     relse = list_entry(list_pop_front(&sema->waiters), struct thread, elem);
     thread_unblock (relse);
     if(relse->priority > thread_current()->priority)
+    // must yield after incrementing sema->value, lest deadlock
       yield = true;
   }
   sema->value++;
-  if(yield && !intr_context())
-    thread_yield();
+  if(yield) {
+    if(!intr_context())  
+      thread_yield();
+    else
+      intr_yield_on_return();
+  }
   intr_set_level (old_level);
 }
 
@@ -216,17 +222,23 @@ lock_acquire (struct lock *lock)
     return;
   }
   if(sema_try_down(&lock->semaphore)) {
+    // lock not held
     lock->holder = cur;
   } else {
     cur->waiting = lock;
     if(holder != NULL && cur->priority > holder->priority) {
+      // donation
       if(lock->origin_priority == -1) {
+        // only first time
         lock->origin_priority = holder->priority;
         holder->priority_restore = holder->priority;
       }
+      // donate and record necessary info
       lock->donate_priority = cur->priority;
       holder->priority = cur->priority;
       holder->donate++;
+
+      // nested donation
       struct lock *nest = holder->waiting;
       while(nest != NULL) {
         if(nest->holder->priority > holder->priority)
@@ -275,13 +287,19 @@ lock_release (struct lock *lock)
   struct thread *holder = lock->holder;
   if(!thread_mlfqs) {
     if(lock->donate_priority != -1) {
+    // there IS a donation
       if(holder->priority > lock->donate_priority) {
+        // not the highest priority donated lock released
+        // just set priority_restore
         holder->priority_restore = MIN(holder->priority_restore, lock->origin_priority);
       } else if (holder->priority == lock->donate_priority) {
+        // exactly the highest priority donated lock
+        // set priority
         holder->priority = MIN(holder->priority_restore, lock->origin_priority);
       }
       holder->donate--;
       if(holder->donate == 0) {
+        // no more donation
         holder->priority_restore = -1;
       }
     }
@@ -374,6 +392,7 @@ cond_signal (struct condition *cond, struct lock *lock UNUSED)
   ASSERT (lock_held_by_current_thread (lock));
 
   if (!list_empty (&cond->waiters)) {
+    // brutal - sort every time
     list_sort(&cond->waiters, cond_priority_less, NULL);
     sema_up (&list_entry (list_pop_front (&cond->waiters),
                           struct semaphore_elem, elem)->semaphore);
