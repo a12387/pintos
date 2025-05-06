@@ -4,6 +4,7 @@
 #include <debug.h>
 #include <list.h>
 #include <stdint.h>
+#include <threads/synch.h>
 #include <hash.h>
 
 /** fixed-point arth */
@@ -50,7 +51,6 @@ struct child_info {
   struct thread *parent;
   struct semaphore wait_sema;
   struct list_elem elem;
-  bool exited;
   bool waited;
 };
 /** A kernel thread or user process.

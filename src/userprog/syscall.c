@@ -31,38 +31,34 @@ static void
 get_user(const void *uaddr, void *dest, int nbyte)
 {
   if(!is_user_vaddr(uaddr)) {
-    goto bad;
+    thread_exit();
   }
   char *pa = pagedir_get_page(thread_current()->pagedir, uaddr);
   if(pa == NULL) {
-    goto bad;
+    thread_exit();
   }
 
   while(nbyte--) {
     *((char *)dest++) = *pa++;
   }
   return;
-bad:
-  thread_exit();
 }
 
 static void
 write_user(const void *uaddr, char *src, int nbyte)
 {
   if(!is_user_vaddr(uaddr)) {
-    goto bad;
+    thread_exit();
   }
   char *pa = pagedir_get_page(thread_current()->pagedir, uaddr);
   if(pa == NULL) {
-    goto bad;
+    thread_exit();
   }
 
   while(nbyte--) {
     *pa++ = *src++;
   }
   return;
-bad:
-  thread_exit();
 }
 
 
@@ -128,7 +124,6 @@ sys_exit(struct intr_frame *f)
   int status;
   get_user(f->esp + 4, &status, 4);
   thread_current()->info->exit_status = status;
-  thread_current()->info->exited = true;
   thread_exit();
   NOT_REACHED();
 }

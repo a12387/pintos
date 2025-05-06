@@ -235,7 +235,6 @@ thread_create (const char *name, int priority,
   t->info->exit_status = -1; // if not exit by exit(), status is -1 by default
   t->info->parent = thread_current();
   sema_init (&t->info->wait_sema, 0);
-  t->info->exited = false;
   t->info->waited = false;
   list_push_back (&thread_current()->children, &t->info->elem);
   if(thread_mlfqs) {
@@ -370,7 +369,7 @@ thread_exit (void)
   }
   for(struct list_elem *e = list_begin(&t->children); e != list_end(&t->children); e = list_next(e)) {
     struct child_info *i = list_entry(e, struct child_info, elem);
-    if(i->exited) {
+    if(sema_try_down(&i->wait_sema)) {
       // has exited but not been waited, and parent exits
       e = list_remove(e)->prev;
       free(i);
