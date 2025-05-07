@@ -22,6 +22,8 @@
 #include "threads/palloc.h"
 #include "threads/pte.h"
 #include "threads/thread.h"
+#include "vm/swap.h"
+#include "vm/frame.h"
 #ifdef USERPROG
 #include "userprog/process.h"
 #include "userprog/exception.h"
@@ -40,7 +42,6 @@
 
 /** Page directory with kernel mappings only. */
 uint32_t *init_page_dir;
-
 #ifdef FILESYS
 /** -f: Format the file system? */
 static bool format_filesys;
@@ -99,6 +100,7 @@ pintos_init (void)
   malloc_init ();
   paging_init ();
 
+
   /* Segmentation. */
 #ifdef USERPROG
   tss_init ();
@@ -126,7 +128,8 @@ pintos_init (void)
   locate_block_devices ();
   filesys_init (format_filesys);
 #endif
-
+  swap_init ();
+  frametable_init();
   printf ("Boot complete.\n");
   
   if (*argv != NULL) {

@@ -1,0 +1,35 @@
+#include "vm/swap.h"
+#include "threads/vaddr.h"
+#include <debug.h>
+
+static struct swaptable sw;
+void swap_init() {
+  sw.swap_block = block_get_role(BLOCK_SWAP);
+  // 1 page = 8 sectors
+  sw.used_map =    
+    bitmap_create(block_size(sw.swap_block) / SECTORS_PER_PAGE); 
+}
+
+uint32_t swap_to_disk(uint32_t *page) {
+  size_t sector = bitmap_scan_and_flip(sw.used_map, 0, 1, false);
+  if (sector == BITMAP_ERROR) {
+    PANIC("swap_to_disk: run out of swap file");
+  }
+  block_sector_t start = sector * SECTORS_PER_PAGE;
+  for (int i = 0; i < SECTORS_PER_PAGE; i++) {
+    block_write(sw.swap_block, start + i, page);
+    page += BLOCK_SECTOR_SIZE;
+  }
+  return start;
+}
+
+void swap_from_disk(uint32_t *page, int pos) {
+  block_sector_t start = pos * SECTORS_PER_PAGE;
+
+  for (int i = 0; i < SECTORS_PER_PAGE; i++) {
+    block_read(sw.swap_block, start + i, page);
+    page += BLOCK_SECTOR_SIZE;
+  }
+
+  bitmap_set_multiple(sw.used_map, pos, SECTORS_PER_PAGE, false);
+}

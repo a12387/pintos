@@ -6,7 +6,6 @@
 #include <stdint.h>
 #include <threads/synch.h>
 #include <hash.h>
-
 /** fixed-point arth */
 #define FP_Q 14
 #define FP_P 17
@@ -53,6 +52,8 @@ struct child_info {
   struct list_elem elem;
   bool waited;
 };
+
+
 /** A kernel thread or user process.
 
    Each thread structure is stored in its own 4 kB page.  The
@@ -138,6 +139,8 @@ struct thread
     struct file *executable;
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /**< Page directory. */
+
+    struct list spt;
 #endif
 
     /* Owned by thread.c. */

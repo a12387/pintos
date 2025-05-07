@@ -13,9 +13,8 @@
 #include "threads/vaddr.h"
 #include "devices/timer.h"
 #include "threads/malloc.h"
-#ifdef USERPROG
 #include "userprog/process.h"
-#endif
+#include "vm/spt.h"
 const int fp59_60 = FP_DIV(TO_FP(59), TO_FP(60));
 const int fp1_60 = FP_DIV(TO_FP(1), TO_FP(60));
 const int fp1_4 = FP_DIV(TO_FP(1), TO_FP(4));
@@ -360,6 +359,11 @@ thread_exit (void)
       t->open_file[i] = NULL;
     }
   }
+  for (struct list_elem *e = list_begin(&t->spt); e != list_end(&t->spt);) {
+    struct spt *s = list_entry(e, struct spt, elem);
+    e = list_next(e);
+    free(s);
+  }
   if(t->info->parent == NULL ) {
     // parent has exited
     free(t->info);
@@ -669,6 +673,7 @@ init_thread (struct thread *t, const char *name, int priority)
   t->nice = 0;
   t->wake_tick = 0;
   list_init(&t->children);
+  list_init(&t->spt);
   t->executable = NULL;
   t->magic = THREAD_MAGIC;
 
@@ -801,3 +806,4 @@ allocate_tid (void)
 /** Offset of `stack' member within `struct thread'.
    Used by switch.S, which can't figure it out on its own. */
 uint32_t thread_stack_ofs = offsetof (struct thread, stack);
+

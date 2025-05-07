@@ -4,7 +4,14 @@
 #include "userprog/gdt.h"
 #include "threads/interrupt.h"
 #include "threads/thread.h"
-
+#include "userprog/pagedir.h"
+#include "threads/pte.h"
+#include "threads/palloc.h"
+#include <string.h>
+#include "filesys/file.h"
+#include "vm/spt.h"
+#include "vm/swap.h"
+#include <threads/malloc.h>
 /** Number of page faults processed. */
 static long long page_fault_cnt;
 
@@ -147,6 +154,55 @@ page_fault (struct intr_frame *f)
   not_present = (f->error_code & PF_P) == 0;
   write = (f->error_code & PF_W) != 0;
   user = (f->error_code & PF_U) != 0;
+  
+  struct thread *t = thread_current();
+  uint32_t *pte = lookup_page(t->pagedir, fault_addr, false);
+
+  // no such page or not a lazy alloc page
+  if (pte == NULL || (*pte & PTE_L) == 0) {
+    kill (f);
+    // exit
+  }
+
+  // pte != NULL && PTE_L set
+  bool writable;
+  bool in_file;
+  void *kpage = palloc_get_page_for_page_fault(); // assume all lazy pages are user pages
+  if (kpage == NULL) {
+    kill (f);
+  }
+  if (((*pte & PTE_SPT) >> 3) == 0) {
+    writable = (*pte & PTE_ZW) != 0; 
+    in_file = false;
+    memset(kpage, 0, PGSIZE);
+  } else {
+    struct spt *spt_elem = (struct spt *)(*pte & (~0x3));
+    writable = spt_elem->writable;
+    if(spt_elem->type == SPT_FILE) {
+      // in file
+      in_file = true;
+      struct file *file = spt_elem->file;
+      uint32_t ptr_offset = (uint32_t)pg_round_down(fault_addr) - (uint32_t)spt_elem->start_uaddr;
+      int size_to_read = spt_elem->nbytes - ptr_offset;
+      uint32_t offset = spt_elem->pos + ptr_offset;
+      file_seek(file, offset);
+      if (file_read(file, kpage, size_to_read) != size_to_read) {
+        palloc_free_page(kpage);
+        kill (f);
+      }
+    } else {
+      in_file = false;
+      swap_from_disk(kpage, spt_elem->pos);
+      list_remove(&spt_elem->elem);
+      free(spt_elem);
+    }
+  }
+  if (!pagedir_set_page_for_page_fault(t->pagedir, pg_round_down(fault_addr), kpage, writable, in_file)) {
+    palloc_free_page(kpage);
+    kill (f);
+  } else {
+    return;
+  }
 
   /* To implement virtual memory, delete the rest of the function
      body, and replace it with code that brings in the page to

@@ -5,7 +5,7 @@
 #include "threads/init.h"
 #include "threads/pte.h"
 #include "threads/palloc.h"
-
+#include "vm/frame.h"
 static uint32_t *active_pd (void);
 static void invalidate_pagedir (uint32_t *);
 
@@ -53,7 +53,7 @@ pagedir_destroy (uint32_t *pd)
    on CREATE.  If CREATE is true, then a new page table is
    created and a pointer into it is returned.  Otherwise, a null
    pointer is returned. */
-static uint32_t *
+uint32_t *
 lookup_page (uint32_t *pd, const void *vaddr, bool create)
 {
   uint32_t *pt, *pde;
@@ -112,6 +112,58 @@ pagedir_set_page (uint32_t *pd, void *upage, void *kpage, bool writable)
     {
       ASSERT ((*pte & PTE_P) == 0);
       *pte = pte_create_user (kpage, writable);
+      frametable_insert(kpage, upage);
+      return true;
+    }
+  else
+    return false;
+}
+
+bool
+pagedir_set_virtual_page (uint32_t *pd, void *upage, struct spt *spt_elem, bool zero_writable)
+{
+  uint32_t *pte;
+
+  ASSERT (pg_ofs (upage) == 0);
+  ASSERT (is_user_vaddr (upage));
+  ASSERT (((uint32_t)spt_elem & 0x3) == 0);
+  ASSERT (pd != init_page_dir);
+
+  pte = lookup_page (pd, upage, true);
+
+  if (pte != NULL)
+    {
+      ASSERT ((*pte & PTE_P) == 0);
+      *pte = (uint32_t)spt_elem | PTE_L;
+      if (spt_elem == NULL && zero_writable) {
+        *pte |= PTE_ZW;
+      }
+      return true;
+    }
+  else 
+    return false;
+}
+
+bool
+pagedir_set_page_for_page_fault (uint32_t *pd, void *upage, void *kpage, bool writable, bool in_file)
+{
+  uint32_t *pte;
+
+  ASSERT (pg_ofs (upage) == 0);
+  ASSERT (pg_ofs (kpage) == 0);
+  ASSERT (is_user_vaddr (upage));
+  ASSERT (vtop (kpage) >> PTSHIFT < init_ram_pages);
+  ASSERT (pd != init_page_dir);
+
+  pte = lookup_page (pd, upage, true);
+
+  if (pte != NULL) 
+    {
+      ASSERT ((*pte & PTE_P) == 0);
+      *pte = pte_create_user (kpage, writable);
+      if(in_file)
+        *pte |= PTE_F;
+      frametable_insert(kpage, upage);
       return true;
     }
   else

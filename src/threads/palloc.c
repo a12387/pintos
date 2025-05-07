@@ -10,7 +10,12 @@
 #include "threads/loader.h"
 #include "threads/synch.h"
 #include "threads/vaddr.h"
-
+#include "threads/thread.h"
+#include "userprog/pagedir.h"
+#include "threads/pte.h"
+#include "vm/swap.h"
+#include "vm/frame.h"
+#include <threads/malloc.h>
 /** Page allocator.  Hands out memory in page-size (or
    page-multiple) chunks.  See malloc.h for an allocator that
    hands out smaller chunks.
@@ -96,7 +101,9 @@ palloc_get_multiple (enum palloc_flags flags, size_t page_cnt)
       if (flags & PAL_ASSERT)
         PANIC ("palloc_get: out of pages");
     }
-
+  if((uint32_t)pages == 0xc0108000) {
+    pages = (void *)0xc0108000;
+  }
   return pages;
 }
 
@@ -111,6 +118,69 @@ void *
 palloc_get_page (enum palloc_flags flags) 
 {
   return palloc_get_multiple (flags, 1);
+}
+
+void *
+palloc_get_page_for_page_fault ()
+{
+  static int clock = 0;
+  uint32_t *ppage, *pte;
+  while (1) {
+    ppage = (uint32_t *)(user_pool.base + PGSIZE * clock);
+    clock++;
+    if (clock % bitmap_size(user_pool.used_map) == 0) {
+      clock = 0;
+    }
+    struct frame *f = frametable_find(ppage);
+    if (f == NULL) {
+      bitmap_flip(user_pool.used_map, clock - 1);
+      return ppage;
+    }
+    pte = lookup_page(f->owner->pagedir, f->vpage, false);
+    if (*pte & PTE_A) {
+      *pte &= ~PTE_A;
+    } else {
+      // evict (no pin now)
+      // 1. swap
+      if(*pte & PTE_D) {
+        struct spt *s;
+        if (*pte & PTE_F) {
+          for (struct list_elem *e = list_begin(&f->owner->spt);
+            e != list_end(&f->owner->spt); e = list_next(e)) {
+            s = list_entry(e, struct spt, elem);
+            if(s->type != SPT_FILE)
+              continue;
+            int ptr_ofs = (int)f->vpage - (int)s->start_uaddr;
+            if(ptr_ofs >= 0 && (uint32_t)ptr_ofs < s->nbytes) {
+              int size_to_write = s->nbytes - ptr_ofs;
+              if(size_to_write > PGSIZE)
+                size_to_write = PGSIZE;
+              file_write(s->file, ppage, PGSIZE);
+              break;
+            }
+          }
+        } else {
+          s = malloc(sizeof(struct spt));
+          int swap_pos = swap_to_disk(ppage);
+          s->file = NULL;
+          s->nbytes = PGSIZE;
+          s->pos = swap_pos;
+          s->start_uaddr = f->vpage;
+          s->type = SPT_SWAP;
+          s->writable = (*pte & PTE_W) != 0;
+          list_push_back(&f->owner->spt, &s->elem);
+        }
+        // 2. unmapping 
+        *pte = (uint32_t)s | 0x2;
+      } else {
+        *pte = 0;
+      }
+      frametable_delete_all(ppage);
+      return ppage;
+      // 3. return 
+      // 4. establish new mapping in pagedir_set_page()
+    }
+  }
 }
 
 /** Frees the PAGE_CNT pages starting at PAGES. */
@@ -137,7 +207,11 @@ palloc_free_multiple (void *pages, size_t page_cnt)
   memset (pages, 0xcc, PGSIZE * page_cnt);
 #endif
 
-  ASSERT (bitmap_all (pool->used_map, page_idx, page_cnt));
+  // ASSERT (bitmap_all (pool->used_map, page_idx, page_cnt));
+  if(!bitmap_all (pool->used_map, page_idx, page_cnt)) {
+    printf("%x\n", (uint32_t)pages);
+    PANIC("eeee");
+  }
   bitmap_set_multiple (pool->used_map, page_idx, page_cnt, false);
 }
 

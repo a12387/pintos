@@ -66,6 +66,11 @@ static inline uintptr_t pd_no (const void *va) {
 #define PTE_U 0x4               /**< 1=user/kernel, 0=kernel only. */
 #define PTE_A 0x20              /**< 1=accessed, 0=not acccessed. */
 #define PTE_D 0x40              /**< 1=dirty, 0=not dirty (PTEs only). */
+#define PTE_F 0x200             /**< 1=page has backup in file */
+/** If PTE not present - for demand paging */
+#define PTE_L 0x2               /**< 1=lazy alloc, 0=not alloc */
+#define PTE_ZW 0x4              /**< 1=writable for zero init page */
+#define PTE_SPT 0xFFFFFFFC      /**< Spt item of the PTE. */
 
 /** Returns a PDE that points to page table PT. */
 static inline uint32_t pde_create (uint32_t *pt) {
