@@ -169,30 +169,31 @@ page_fault (struct intr_frame *f)
   }
 
   // pte != NULL && PTE_L set
+  struct spt *spt_elem = (struct spt *)(*pte & (~0x3));
   bool writable;
-  bool in_file;
+  bool zero_init = (((*pte & PTE_SPT) >> 3) == 0); // PTE_L || (PTE_L | PTE_ZW)
+  if (zero_init) {
+    writable = (*pte & PTE_ZW) != 0; 
+    if (!writable && write) {
+      thread_exit();
+    }
+  } else {
+    writable = spt_elem->writable;
+    if (!writable && write) {
+      thread_exit();
+    }
+  }
   void *kpage = palloc_get_page_for_page_fault(); // assume all lazy pages are user pages
   if (kpage == NULL) {
     kill (f);
   }
   memset(kpage, 0, PGSIZE);
-  if (((*pte & PTE_SPT) >> 3) == 0) {
-    writable = (*pte & PTE_ZW) != 0; 
-    if (!writable && write) {
-      palloc_free_page(kpage);
-      thread_exit();
-    }
-    in_file = false;
-  } else {
-    struct spt *spt_elem = (struct spt *)(*pte & (~0x3));
-    writable = spt_elem->writable;
-    if (!writable && write) {
-      palloc_free_page(kpage);
-      thread_exit();
-    }
+  if (!pagedir_set_page(t->pagedir, pg_round_down(fault_addr), kpage, writable)) {
+    palloc_free_page(kpage);
+    kill (f);
+  }
+  if (!zero_init) {
     if(spt_elem->type == SPT_FILE) {
-      // in file
-      in_file = true;
       struct file *file = spt_elem->file;
       uint32_t ptr_offset = (uint32_t)pg_round_down(fault_addr) - (uint32_t)spt_elem->start_uaddr;
       uint32_t size_to_read = spt_elem->nbytes - ptr_offset;
@@ -205,16 +206,10 @@ page_fault (struct intr_frame *f)
         kill (f);
       }
     } else {
-      in_file = false;
       swap_from_disk(kpage, spt_elem->pos);
     }
   }
-  if (!pagedir_set_page_for_page_fault(t->pagedir, pg_round_down(fault_addr), kpage, writable, in_file)) {
-    palloc_free_page(kpage);
-    kill (f);
-  } else {
-    return;
-  }
+  return;
 
   /* To implement virtual memory, delete the rest of the function
      body, and replace it with code that brings in the page to

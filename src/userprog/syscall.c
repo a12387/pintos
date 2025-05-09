@@ -27,30 +27,20 @@ is_valid_string(char *s)
   }
   return false;
 }
-static void *
+static void
 check_addr(void *uaddr) {
   if (!is_user_vaddr(uaddr)) {
     thread_exit();
   }
-  void *pa = pagedir_get_page(thread_current()->pagedir, uaddr);
-  if(pa == NULL) {
-    thread_exit();
-  } else {
-    return pa;
-  }
-  NOT_REACHED();
 }
 static void
 get_user(void *uaddr, void *dest, int nbyte)
 {
-  char *pa = check_addr(uaddr);
+  check_addr(uaddr);
+  check_addr(uaddr + nbyte);
 
   while(nbyte--) {
-    *((char *)dest++) = *(char *)pa++;
-    uaddr++;
-    if((int)uaddr % PGSIZE == 0) {
-      pa = check_addr(uaddr);
-    }
+    *((char *)dest++) = *(char *)uaddr++;
   }
   return;
 }
@@ -58,14 +48,10 @@ get_user(void *uaddr, void *dest, int nbyte)
 static void
 write_user(void *uaddr, char *src, int nbyte)
 {
-  char *pa = check_addr(uaddr);
-
+  check_addr(uaddr);
+  check_addr(uaddr + nbyte);
   while(nbyte--) {
-    *pa++ = *src++;
-    uaddr++;
-    if((int)uaddr % PGSIZE == 0) {
-      pa = check_addr(uaddr);
-    }
+    *(char *)uaddr++ = *src++;
   }
   return;
 }
@@ -260,9 +246,12 @@ sys_read(struct intr_frame *f)
     }
     return bytes_read;
   } else {
+    char *kbuffer = malloc(size);
     lock_acquire(&file_lock);
-    bytes_read = file_read(file, buffer, size);
+    bytes_read = file_read(file, kbuffer, size);
     lock_release(&file_lock);
+    memcpy(buffer, kbuffer, bytes_read);
+    free(kbuffer);
     return bytes_read;
   }
 }
@@ -287,18 +276,18 @@ sys_write(struct intr_frame *f)
   if(!is_user_vaddr(buffer + size)) {
     return -1;
   }
-  buffer = pagedir_get_page(thread_current()->pagedir, buffer);
-  if(buffer == NULL)
-    thread_exit();
 
   int byte_written = 0;
   if(fd + 2 == STDOUT_FILENO) {
     putbuf(buffer, size);
     return size;
   } else {
+    char *kbuffer = malloc (size);
+    memcpy(kbuffer, buffer, size);
     lock_acquire(&file_lock);
-    byte_written = file_write(file, buffer, size);
+    byte_written = file_write(file, kbuffer, size);
     lock_release(&file_lock);
+    free(kbuffer);
     return byte_written;
   }
 }

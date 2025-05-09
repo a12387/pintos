@@ -40,8 +40,10 @@ pagedir_destroy (uint32_t *pd)
         uint32_t *pte;
         
         for (pte = pt; pte < pt + PGSIZE / sizeof *pte; pte++)
-          if (*pte & PTE_P) 
+          if (*pte & PTE_P) {
+            frametable_delete_all (pte_get_page (*pte));
             palloc_free_page (pte_get_page (*pte));
+          }
         palloc_free_page (pt);
       }
   palloc_free_page (pd);
@@ -141,32 +143,6 @@ pagedir_set_virtual_page (uint32_t *pd, void *upage, struct spt *spt_elem, bool 
       return true;
     }
   else 
-    return false;
-}
-
-bool
-pagedir_set_page_for_page_fault (uint32_t *pd, void *upage, void *kpage, bool writable, bool in_file)
-{
-  uint32_t *pte;
-
-  ASSERT (pg_ofs (upage) == 0);
-  ASSERT (pg_ofs (kpage) == 0);
-  ASSERT (is_user_vaddr (upage));
-  ASSERT (vtop (kpage) >> PTSHIFT < init_ram_pages);
-  ASSERT (pd != init_page_dir);
-
-  pte = lookup_page (pd, upage, true);
-
-  if (pte != NULL) 
-    {
-      ASSERT ((*pte & PTE_P) == 0);
-      *pte = pte_create_user (kpage, writable);
-      if(in_file)
-        *pte |= PTE_F;
-      frametable_insert(kpage, upage);
-      return true;
-    }
-  else
     return false;
 }
 

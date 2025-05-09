@@ -41,6 +41,7 @@ struct pool
 /** Two pools: one for kernel data, one for user pages. */
 static struct pool kernel_pool, user_pool;
 static int clock;
+static struct lock clock_lock;
 static void init_pool (struct pool *, void *base, size_t page_cnt,
                        const char *name);
 static bool page_from_pool (const struct pool *, void *page);
@@ -65,6 +66,7 @@ palloc_init (size_t user_page_limit)
   init_pool (&user_pool, free_start + kernel_pages * PGSIZE,
              user_pages, "user pool");
   clock = bitmap_size(user_pool.used_map);
+  lock_init(&clock_lock);
 }
 
 /** Obtains and returns a group of PAGE_CNT contiguous free pages.
@@ -124,17 +126,25 @@ palloc_get_page_for_page_fault ()
 
   uint32_t *ppage, *pte;
   int bmsize = bitmap_size(user_pool.used_map);
+  lock_acquire (&clock_lock);
   while (1) {
-    ppage = (uint32_t *)(user_pool.base + PGSIZE * (clock - bmsize) );
+    // 确保同一时刻请求clock的线程获得不同的clock值
+    int local_clock = clock;
     clock++;
     if (clock % bmsize == 0) {
       clock = bmsize;
     }
-    struct frame *f = frametable_find(ppage);
-    if (f == NULL) {
-      bitmap_flip(user_pool.used_map, (clock - 1) % bmsize);
+    ppage = (uint32_t *)(user_pool.base + PGSIZE * (local_clock - bmsize) );
+    
+
+    if (!bitmap_test(user_pool.used_map, (local_clock) % bmsize)) {
+      bitmap_flip(user_pool.used_map, (local_clock) % bmsize);
+      lock_release(&clock_lock);
       return ppage;
     }
+    struct frame *f = frametable_find(ppage);
+    if (f == NULL) 
+      continue;
     pte = lookup_page(f->owner->pagedir, f->vpage, false);
     if (*pte & PTE_A) {
       *pte &= ~PTE_A;
@@ -191,6 +201,7 @@ palloc_get_page_for_page_fault ()
       }
     
       frametable_delete_all(ppage);
+      lock_release(&clock_lock);
       return ppage;
       // 3. return 
       // 4. establish new mapping in pagedir_set_page()
@@ -222,11 +233,7 @@ palloc_free_multiple (void *pages, size_t page_cnt)
   memset (pages, 0xcc, PGSIZE * page_cnt);
 #endif
 
-  // ASSERT (bitmap_all (pool->used_map, page_idx, page_cnt));
-  if(!bitmap_all (pool->used_map, page_idx, page_cnt)) {
-    printf("%x\n", (uint32_t)pages);
-    PANIC("eeee");
-  }
+  ASSERT (bitmap_all (pool->used_map, page_idx, page_cnt));
   bitmap_set_multiple (pool->used_map, page_idx, page_cnt, false);
 }
 

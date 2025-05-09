@@ -15,6 +15,7 @@
 #include "threads/malloc.h"
 #include "userprog/process.h"
 #include "vm/spt.h"
+#include "vm/swap.h"
 const int fp59_60 = FP_DIV(TO_FP(59), TO_FP(60));
 const int fp1_60 = FP_DIV(TO_FP(1), TO_FP(60));
 const int fp1_4 = FP_DIV(TO_FP(1), TO_FP(4));
@@ -359,9 +360,13 @@ thread_exit (void)
       t->open_file[i] = NULL;
     }
   }
+  // free spt and swap space
   for (struct list_elem *e = list_begin(&t->spt); e != list_end(&t->spt);) {
     struct spt *s = list_entry(e, struct spt, elem);
     e = list_next(e);
+    if(s->type == SPT_SWAP) {
+      swap_free(s->pos);
+    }
     free(s);
   }
   if(t->info->parent == NULL ) {

@@ -34,8 +34,9 @@ void frametable_insert(uint32_t *ppage, uint32_t *vpage) {
 struct frame *frametable_find(uint32_t *ppage) {
   struct frame f;
   f.ppage = ppage;
-
+  lock_acquire(&ft_lock);
   struct hash_elem *e = hash_find(&frametable, &f.elem);
+  lock_release(&ft_lock);
   if (e == NULL) return NULL;
   else return hash_entry(e, struct frame, elem);
 }
@@ -44,7 +45,10 @@ void frametable_delete_all(uint32_t *ppage) {
   struct frame f;
   f.ppage = ppage;
 
+  lock_acquire(&ft_lock);
   struct hash_elem *e = hash_delete(&frametable, &f.elem);
+  lock_release(&ft_lock);
   struct frame *fr = hash_entry(e, struct frame, elem);
   free(fr);
 }
+

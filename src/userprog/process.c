@@ -544,18 +544,19 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 static bool
 setup_stack (void **esp) 
 {
-  uint8_t *kpage;
   bool success = false;
 
-  kpage = palloc_get_page (PAL_USER | PAL_ZERO);
-  if (kpage != NULL) 
-    {
-      success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
-      if (success)
-        *esp = PHYS_BASE;
-      else
-        palloc_free_page (kpage);
-    }
+  // kpage = palloc_get_page (PAL_USER | PAL_ZERO);
+  // if (kpage != NULL) 
+  //   {
+  //     success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
+  //     if (success)
+  //       *esp = PHYS_BASE;
+  //     else
+  //       palloc_free_page (kpage);
+  //   }
+  success = pagedir_set_virtual_page(thread_current()->pagedir, ((void *) PHYS_BASE) - PGSIZE, NULL, true);
+  *esp = PHYS_BASE;
   return success;
 }
 
