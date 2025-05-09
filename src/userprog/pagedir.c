@@ -121,6 +121,11 @@ pagedir_set_page (uint32_t *pd, void *upage, void *kpage, bool writable)
     return false;
 }
 
+/**
+ *  Create PTE without physical page and correspond PTE with spt entry.
+ *  If spt entry is NULL, this VMA should be zero-inited
+ *  and since there is no spt entry, we should mark writable in PTE
+ */
 bool
 pagedir_set_virtual_page (uint32_t *pd, void *upage, struct spt *spt_elem, bool zero_writable)
 {

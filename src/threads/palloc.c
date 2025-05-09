@@ -65,6 +65,7 @@ palloc_init (size_t user_page_limit)
   init_pool (&kernel_pool, free_start, kernel_pages, "kernel pool");
   init_pool (&user_pool, free_start + kernel_pages * PGSIZE,
              user_pages, "user pool");
+             
   clock = bitmap_size(user_pool.used_map);
   lock_init(&clock_lock);
 }
@@ -120,15 +121,27 @@ palloc_get_page (enum palloc_flags flags)
   return palloc_get_multiple (flags, 1);
 }
 
+/**
+ *  Obtain a physical page only for page fault
+ *  since clock hand only moves when page fault occurs
+ *  
+ *  If a palloc is not in page fault and runs out of frames, 
+ *  the kernel will stop since PAL_USER is not used anywhere 
+ *  and this palloc is a kernel pool palloc.
+ * 
+ *  But if in page fault, undoubtedly it is to alloc a user frame
+ *  and we can swap. 
+ */
 void *
 palloc_get_page_for_page_fault ()
 {
 
   uint32_t *ppage, *pte;
   int bmsize = bitmap_size(user_pool.used_map);
+
+  // make sure `clock` is accessed by only one thread at a time
   lock_acquire (&clock_lock);
   while (1) {
-    // 确保同一时刻请求clock的线程获得不同的clock值
     int local_clock = clock;
     clock++;
     if (clock % bmsize == 0) {
@@ -149,11 +162,12 @@ palloc_get_page_for_page_fault ()
     if (*pte & PTE_A) {
       *pte &= ~PTE_A;
     } else {
-      // evict (no pin now)
+      // evict 
       // 1. swap
       struct spt *s = NULL;
       bool found = false;
       int ptr_ofs;
+      // try to find in spt list
       for (struct list_elem *e = list_begin(&f->owner->spt);
         e != list_end(&f->owner->spt); e = list_next(e)) {
         s = list_entry(e, struct spt, elem);
@@ -164,21 +178,28 @@ palloc_get_page_for_page_fault ()
         }
       }
       if (found && (*pte & PTE_D)) {
+        // has file backup
         if (s->type == SPT_FILE) {
           int size_to_write = s->nbytes - ptr_ofs;
           if (size_to_write >= PGSIZE) {
             file_seek(s->file, s->offset + ptr_ofs);
             file_write(s->file, ppage, PGSIZE);
           } else {
+            // only part of page has file backup
+            // pretend as not found
+            // and give the page to swap
             found = false;
             s->nbytes -= size_to_write;
           }
         }
+        // has swap backup
         if (s->type == SPT_SWAP) {
           swap_to_disk_at(ppage, s->pos);
         }
       }
+      // no backup (or just evicted from file to swap)
       if (!found && (*pte & PTE_D)) {
+        // make new spt entry for swap
         found = true;
         s = malloc(sizeof (struct spt));
         s->file = NULL;
@@ -191,6 +212,7 @@ palloc_get_page_for_page_fault ()
         list_push_back(&f->owner->spt, &s->elem);
       }
 
+      // 2. unmapping (make pte point to spt | NULL)
       if (found) {
         *pte = (uint32_t)s | PTE_L;
       } else {

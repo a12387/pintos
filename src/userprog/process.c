@@ -482,6 +482,7 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
   ASSERT (pg_ofs (upage) == 0);
   ASSERT (ofs % PGSIZE == 0);
 
+  // setup the VMA from executable
   struct thread *t = thread_current();
   struct spt *spt_elem = malloc(sizeof (struct spt));
   spt_elem->file = file;
@@ -522,13 +523,19 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
       // read_bytes -= page_read_bytes;
       // zero_bytes -= page_zero_bytes;
       // upage += PGSIZE;
+
+
       size_t page_read_bytes = read_bytes < PGSIZE ? read_bytes : PGSIZE;
       size_t page_zero_bytes = PGSIZE - page_read_bytes;
-
-      
       if (page_read_bytes == 0) {
+        // Fully zero init
         pagedir_set_virtual_page(t->pagedir, upage, NULL, writable);
       } else {
+        /** 
+         *  Fully or partly from file.
+         *  For pages that partly load from file, we should regard them as anonymous page and
+         *  swap them to swap space. But only for the first time they should be loaded from file. 
+         */
         pagedir_set_virtual_page(t->pagedir, upage, spt_elem, writable);
       }
       read_bytes -= page_read_bytes;
@@ -555,6 +562,8 @@ setup_stack (void **esp)
   //     else
   //       palloc_free_page (kpage);
   //   }
+
+  /** Setup virtual stack */
   success = pagedir_set_virtual_page(thread_current()->pagedir, ((void *) PHYS_BASE) - PGSIZE, NULL, true);
   *esp = PHYS_BASE;
   return success;

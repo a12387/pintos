@@ -6,6 +6,11 @@
 #include "threads/synch.h"
 
 #define SECTORS_PER_PAGE (PGSIZE / BLOCK_SECTOR_SIZE)
+
+/**
+ *  For convenience, put these variables together.
+ *  Can be replaced by static vars.
+ */
 struct swaptable {
   struct bitmap *used_map;
   struct block *swap_block;

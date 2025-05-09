@@ -36,6 +36,9 @@ check_addr(void *uaddr) {
 static void
 get_user(void *uaddr, void *dest, int nbyte)
 {
+  // as long as the whole area in user space,
+  // we can distinguish whether it is valid or not
+  // by page fault handler
   check_addr(uaddr);
   check_addr(uaddr + nbyte);
 

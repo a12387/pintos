@@ -2,7 +2,11 @@
 #include "threads/vaddr.h"
 #include <debug.h>
 
-static struct swaptable sw;
+static struct swaptable sw;   /**< Global swaptable */
+
+/** 
+ *  Init swaptable
+ */
 void swap_init() {
   sw.swap_block = block_get_role(BLOCK_SWAP);
   // 1 page = 8 sectors
@@ -12,6 +16,11 @@ void swap_init() {
   lock_init(&sw.bm_lock);
 }
 
+/**
+ *  Swap the given physical page to swap space.
+ *  It will find the first available 8 sectors and
+ *  put the page into disk.
+ */
 uint32_t swap_to_disk(void *page) {
   lock_acquire(&sw.bm_lock);
   size_t sector = bitmap_scan_and_flip(sw.used_map, 0, 1, false);
@@ -22,6 +31,10 @@ uint32_t swap_to_disk(void *page) {
   return swap_to_disk_at(page, sector);
 }
 
+
+/**
+ *  Swap the given physical page to the given sectors of swap space
+ */
 uint32_t swap_to_disk_at(void *page, int sector) {
   block_sector_t start = sector * SECTORS_PER_PAGE;
   for (int i = 0; i < SECTORS_PER_PAGE; i++) {
@@ -33,6 +46,10 @@ uint32_t swap_to_disk_at(void *page, int sector) {
   return sector;
 }
 
+/**
+ *  Swap data from disk to page
+ *  The data may be used later so cannot free the swap slot
+ */
 void swap_from_disk(void *page, int pos) {
   block_sector_t start = pos * SECTORS_PER_PAGE;
 
@@ -44,6 +61,9 @@ void swap_from_disk(void *page, int pos) {
   }
 }
 
+/**
+ *  When a process stops, use this function to free its swap slots. 
+ */
 void swap_free(int pos) {
   lock_acquire(&sw.bm_lock);
   bitmap_set(sw.used_map, pos, false);

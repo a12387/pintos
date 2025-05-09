@@ -164,14 +164,17 @@ page_fault (struct intr_frame *f)
 
   // no such page or not a lazy alloc page
   if (pte == NULL || (*pte & PTE_L) == 0) {
+    // should not use kill()
+    // maybe a syscall pagefault in kernel
+    // kill() will stop the kernel
     thread_exit();
-    // exit
   }
 
   // pte != NULL && PTE_L set
   struct spt *spt_elem = (struct spt *)(*pte & (~0x3));
   bool writable;
   bool zero_init = (((*pte & PTE_SPT) >> 3) == 0); // PTE_L || (PTE_L | PTE_ZW)
+  // check writable first, so that we can set page right after palloc
   if (zero_init) {
     writable = (*pte & PTE_ZW) != 0; 
     if (!writable && write) {
@@ -192,6 +195,7 @@ page_fault (struct intr_frame *f)
     palloc_free_page(kpage);
     kill (f);
   }
+  // if zero_init, no more things to do
   if (!zero_init) {
     if(spt_elem->type == SPT_FILE) {
       struct file *file = spt_elem->file;
@@ -210,15 +214,5 @@ page_fault (struct intr_frame *f)
     }
   }
   return;
-
-  /* To implement virtual memory, delete the rest of the function
-     body, and replace it with code that brings in the page to
-     which fault_addr refers. */
-  printf ("Page fault at %p: %s error %s page in %s context.\n",
-          fault_addr,
-          not_present ? "not present" : "rights violation",
-          write ? "writing" : "reading",
-          user ? "user" : "kernel");
-  kill (f);
 }
 
