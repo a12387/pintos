@@ -354,6 +354,7 @@ thread_exit (void)
 #ifdef USERPROG
   process_exit ();
   struct thread *t = thread_current();
+  // if (t->kbuffer != NULL) free(t->kbuffer);
   for(int i = 0; i < NOFILE; i++) {
     if(t->open_file[i] != NULL) {
       file_close(t->open_file[i]);
@@ -677,6 +678,7 @@ init_thread (struct thread *t, const char *name, int priority)
   t->recent_cpu = 0;
   t->nice = 0;
   t->wake_tick = 0;
+  t->kbuffer = NULL;
   list_init(&t->children);
   list_init(&t->spt);
   t->executable = NULL;

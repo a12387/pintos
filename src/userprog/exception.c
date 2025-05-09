@@ -191,10 +191,7 @@ page_fault (struct intr_frame *f)
     kill (f);
   }
   memset(kpage, 0, PGSIZE);
-  if (!pagedir_set_page(t->pagedir, pg_round_down(fault_addr), kpage, writable)) {
-    palloc_free_page(kpage);
-    kill (f);
-  }
+  
   // if zero_init, no more things to do
   if (!zero_init) {
     if(spt_elem->type == SPT_FILE) {
@@ -212,6 +209,10 @@ page_fault (struct intr_frame *f)
     } else {
       swap_from_disk(kpage, spt_elem->pos);
     }
+  }
+  if (!pagedir_set_page(t->pagedir, pg_round_down(fault_addr), kpage, writable)) {
+    palloc_free_page(kpage);
+    kill (f);
   }
   return;
 }

@@ -249,12 +249,14 @@ sys_read(struct intr_frame *f)
     }
     return bytes_read;
   } else {
-    char *kbuffer = malloc(size);
+    struct thread *t = thread_current();
+    t->kbuffer = malloc(size);
     lock_acquire(&file_lock);
-    bytes_read = file_read(file, kbuffer, size);
+    bytes_read = file_read(file, t->kbuffer, size);
     lock_release(&file_lock);
-    memcpy(buffer, kbuffer, bytes_read);
-    free(kbuffer);
+    memcpy(buffer, t->kbuffer, bytes_read);
+    free(t->kbuffer);
+    t->kbuffer = NULL;
     return bytes_read;
   }
 }
@@ -285,12 +287,14 @@ sys_write(struct intr_frame *f)
     putbuf(buffer, size);
     return size;
   } else {
-    char *kbuffer = malloc (size);
-    memcpy(kbuffer, buffer, size);
+    struct thread *t = thread_current();
+    t->kbuffer = malloc (size);
+    memcpy(t->kbuffer, buffer, size);
     lock_acquire(&file_lock);
-    byte_written = file_write(file, kbuffer, size);
+    byte_written = file_write(file, t->kbuffer, size);
     lock_release(&file_lock);
-    free(kbuffer);
+    free(t->kbuffer);
+    t->kbuffer = NULL;
     return byte_written;
   }
 }

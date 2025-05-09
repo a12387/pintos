@@ -140,28 +140,32 @@ palloc_get_page_for_page_fault ()
   int bmsize = bitmap_size(user_pool.used_map);
 
   // make sure `clock` is accessed by only one thread at a time
-  lock_acquire (&clock_lock);
   while (1) {
+    lock_acquire (&clock_lock);
     int local_clock = clock;
     clock++;
     if (clock % bmsize == 0) {
       clock = bmsize;
     }
+    lock_release(&clock_lock);
     ppage = (uint32_t *)(user_pool.base + PGSIZE * (local_clock - bmsize) );
     
 
     if (!bitmap_test(user_pool.used_map, (local_clock) % bmsize)) {
       bitmap_flip(user_pool.used_map, (local_clock) % bmsize);
-      lock_release(&clock_lock);
+      
       return ppage;
     }
     struct frame *f = frametable_find(ppage);
     if (f == NULL) 
       continue;
     pte = lookup_page(f->owner->pagedir, f->vpage, false);
+    
     if (*pte & PTE_A) {
       *pte &= ~PTE_A;
     } else {
+      // prevent future accessing
+      *pte &= ~(PTE_P);
       // evict 
       // 1. swap
       struct spt *s = NULL;
@@ -223,7 +227,6 @@ palloc_get_page_for_page_fault ()
       }
     
       frametable_delete_all(ppage);
-      lock_release(&clock_lock);
       return ppage;
       // 3. return 
       // 4. establish new mapping in pagedir_set_page()

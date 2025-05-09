@@ -134,12 +134,12 @@ struct thread
     /* For wait and exit */
     struct list children;
     struct child_info *info;
-
     struct file *open_file[NOFILE];
     struct file *executable;
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /**< Page directory. */
 
+    uint8_t *kbuffer;
     struct list spt;
 #endif
 
