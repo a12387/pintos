@@ -486,7 +486,7 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
   struct spt *spt_elem = malloc(sizeof (struct spt));
   spt_elem->file = file;
   spt_elem->nbytes = read_bytes;
-  spt_elem->pos = ofs;
+  spt_elem->offset = ofs;
   spt_elem->start_uaddr = (uint32_t *)upage;
   spt_elem->writable = writable;
   spt_elem->type = SPT_FILE;

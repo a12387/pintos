@@ -5,8 +5,8 @@
 #include "filesys/file.h"
 #include "list.h"
 enum spt_type {
-  SPT_FILE,
-  SPT_SWAP
+  SPT_FILE = 1,
+  SPT_SWAP = 2,
 };
 
 struct spt {
@@ -14,6 +14,7 @@ struct spt {
   uint32_t nbytes;
   struct file *file;
   uint32_t pos;
+  uint32_t offset;
   enum spt_type type;
   bool writable;
   struct list_elem elem;

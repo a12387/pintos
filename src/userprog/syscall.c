@@ -27,36 +27,45 @@ is_valid_string(char *s)
   }
   return false;
 }
-static void
-get_user(const void *uaddr, void *dest, int nbyte)
-{
-  if(!is_user_vaddr(uaddr)) {
+static void *
+check_addr(void *uaddr) {
+  if (!is_user_vaddr(uaddr)) {
     thread_exit();
   }
-  char *pa = pagedir_get_page(thread_current()->pagedir, uaddr);
+  void *pa = pagedir_get_page(thread_current()->pagedir, uaddr);
   if(pa == NULL) {
     thread_exit();
+  } else {
+    return pa;
   }
+  NOT_REACHED();
+}
+static void
+get_user(void *uaddr, void *dest, int nbyte)
+{
+  char *pa = check_addr(uaddr);
 
   while(nbyte--) {
-    *((char *)dest++) = *pa++;
+    *((char *)dest++) = *(char *)pa++;
+    uaddr++;
+    if((int)uaddr % PGSIZE == 0) {
+      pa = check_addr(uaddr);
+    }
   }
   return;
 }
 
 static void
-write_user(const void *uaddr, char *src, int nbyte)
+write_user(void *uaddr, char *src, int nbyte)
 {
-  if(!is_user_vaddr(uaddr)) {
-    thread_exit();
-  }
-  char *pa = pagedir_get_page(thread_current()->pagedir, uaddr);
-  if(pa == NULL) {
-    thread_exit();
-  }
+  char *pa = check_addr(uaddr);
 
   while(nbyte--) {
     *pa++ = *src++;
+    uaddr++;
+    if((int)uaddr % PGSIZE == 0) {
+      pa = check_addr(uaddr);
+    }
   }
   return;
 }
@@ -135,9 +144,6 @@ sys_exec(struct intr_frame *f)
   get_user(f->esp + 4, &cmdline, sizeof cmdline);
   if(!is_valid_string(cmdline))
     thread_exit();
-  cmdline = pagedir_get_page(thread_current()->pagedir, cmdline);
-  if(cmdline == NULL)
-    thread_exit();
   int ret = process_execute(cmdline);
   return ret;
 }
@@ -159,9 +165,6 @@ sys_create(struct intr_frame *f)
   if(!is_valid_string(file_name))
     thread_exit();
   get_user(f->esp + 4 + sizeof file_name, &init_size, sizeof init_size);
-  file_name = pagedir_get_page(thread_current()->pagedir, file_name);
-  if(file_name == NULL)
-    thread_exit();
   lock_acquire(&file_lock);
   int ret = filesys_create(file_name, (off_t)init_size);
   lock_release(&file_lock);
@@ -175,9 +178,6 @@ sys_remove(struct intr_frame *f)
   get_user(f->esp + 4, &file_name, sizeof file_name);
   if(!is_valid_string(file_name))
     thread_exit();
-  file_name = pagedir_get_page(thread_current()->pagedir, file_name);
-  if(file_name == NULL)
-    thread_exit();
   lock_acquire(&file_lock);
   int ret = filesys_remove(file_name);
   lock_release(&file_lock);
@@ -189,10 +189,8 @@ sys_open(struct intr_frame *f)
 {
   char *file_name;
   get_user(f->esp + 4, &file_name, sizeof file_name);
+
   if (!is_valid_string(file_name))
-    thread_exit();
-  file_name = pagedir_get_page(thread_current()->pagedir, file_name);
-  if(file_name == NULL)
     thread_exit();
   lock_acquire(&file_lock);
   struct file *ret = filesys_open(file_name);

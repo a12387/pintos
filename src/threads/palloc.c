@@ -40,7 +40,7 @@ struct pool
 
 /** Two pools: one for kernel data, one for user pages. */
 static struct pool kernel_pool, user_pool;
-
+static int clock;
 static void init_pool (struct pool *, void *base, size_t page_cnt,
                        const char *name);
 static bool page_from_pool (const struct pool *, void *page);
@@ -64,6 +64,7 @@ palloc_init (size_t user_page_limit)
   init_pool (&kernel_pool, free_start, kernel_pages, "kernel pool");
   init_pool (&user_pool, free_start + kernel_pages * PGSIZE,
              user_pages, "user pool");
+  clock = bitmap_size(user_pool.used_map);
 }
 
 /** Obtains and returns a group of PAGE_CNT contiguous free pages.
@@ -101,9 +102,6 @@ palloc_get_multiple (enum palloc_flags flags, size_t page_cnt)
       if (flags & PAL_ASSERT)
         PANIC ("palloc_get: out of pages");
     }
-  if((uint32_t)pages == 0xc0108000) {
-    pages = (void *)0xc0108000;
-  }
   return pages;
 }
 
@@ -123,17 +121,18 @@ palloc_get_page (enum palloc_flags flags)
 void *
 palloc_get_page_for_page_fault ()
 {
-  static int clock = 0;
+
   uint32_t *ppage, *pte;
+  int bmsize = bitmap_size(user_pool.used_map);
   while (1) {
-    ppage = (uint32_t *)(user_pool.base + PGSIZE * clock);
+    ppage = (uint32_t *)(user_pool.base + PGSIZE * (clock - bmsize) );
     clock++;
-    if (clock % bitmap_size(user_pool.used_map) == 0) {
-      clock = 0;
+    if (clock % bmsize == 0) {
+      clock = bmsize;
     }
     struct frame *f = frametable_find(ppage);
     if (f == NULL) {
-      bitmap_flip(user_pool.used_map, clock - 1);
+      bitmap_flip(user_pool.used_map, (clock - 1) % bmsize);
       return ppage;
     }
     pte = lookup_page(f->owner->pagedir, f->vpage, false);
@@ -142,39 +141,55 @@ palloc_get_page_for_page_fault ()
     } else {
       // evict (no pin now)
       // 1. swap
-      if(*pte & PTE_D) {
-        struct spt *s;
-        if (*pte & PTE_F) {
-          for (struct list_elem *e = list_begin(&f->owner->spt);
-            e != list_end(&f->owner->spt); e = list_next(e)) {
-            s = list_entry(e, struct spt, elem);
-            if(s->type != SPT_FILE)
-              continue;
-            int ptr_ofs = (int)f->vpage - (int)s->start_uaddr;
-            if(ptr_ofs >= 0 && (uint32_t)ptr_ofs < s->nbytes) {
-              int size_to_write = s->nbytes - ptr_ofs;
-              if(size_to_write > PGSIZE)
-                size_to_write = PGSIZE;
-              file_write(s->file, ppage, PGSIZE);
-              break;
-            }
-          }
-        } else {
-          s = malloc(sizeof(struct spt));
-          int swap_pos = swap_to_disk(ppage);
-          s->file = NULL;
-          s->nbytes = PGSIZE;
-          s->pos = swap_pos;
-          s->start_uaddr = f->vpage;
-          s->type = SPT_SWAP;
-          s->writable = (*pte & PTE_W) != 0;
-          list_push_back(&f->owner->spt, &s->elem);
+      struct spt *s = NULL;
+      bool found = false;
+      int ptr_ofs;
+      for (struct list_elem *e = list_begin(&f->owner->spt);
+        e != list_end(&f->owner->spt); e = list_next(e)) {
+        s = list_entry(e, struct spt, elem);
+        ptr_ofs = (int)f->vpage - (int)s->start_uaddr;
+        if(ptr_ofs >= 0 && (uint32_t)ptr_ofs < s->nbytes) {
+          found = true;
+          break;
         }
-        // 2. unmapping 
-        *pte = (uint32_t)s | 0x2;
-      } else {
-        *pte = 0;
       }
+      if (found && (*pte & PTE_D)) {
+        if (s->type == SPT_FILE) {
+          int size_to_write = s->nbytes - ptr_ofs;
+          if (size_to_write >= PGSIZE) {
+            file_seek(s->file, s->offset + ptr_ofs);
+            file_write(s->file, ppage, PGSIZE);
+          } else {
+            found = false;
+            s->nbytes -= size_to_write;
+          }
+        }
+        if (s->type == SPT_SWAP) {
+          swap_to_disk_at(ppage, s->pos);
+        }
+      }
+      if (!found && (*pte & PTE_D)) {
+        found = true;
+        s = malloc(sizeof (struct spt));
+        s->file = NULL;
+        s->nbytes = PGSIZE;
+        s->offset = 0;
+        s->pos = swap_to_disk(ppage);
+        s->start_uaddr = f->vpage;
+        s->type = SPT_SWAP;
+        s->writable = (*pte & PTE_W) != 0;
+        list_push_back(&f->owner->spt, &s->elem);
+      }
+
+      if (found) {
+        *pte = (uint32_t)s | PTE_L;
+      } else {
+        if (*pte & PTE_W)
+          *pte = PTE_L | PTE_ZW; // zeros
+        else 
+          *pte = PTE_L;
+      }
+    
       frametable_delete_all(ppage);
       return ppage;
       // 3. return 

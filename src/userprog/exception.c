@@ -155,12 +155,16 @@ page_fault (struct intr_frame *f)
   write = (f->error_code & PF_W) != 0;
   user = (f->error_code & PF_U) != 0;
   
+  if (!is_user_vaddr(fault_addr)) {
+    kill(f);
+  }
+
   struct thread *t = thread_current();
   uint32_t *pte = lookup_page(t->pagedir, fault_addr, false);
 
   // no such page or not a lazy alloc page
   if (pte == NULL || (*pte & PTE_L) == 0) {
-    kill (f);
+    thread_exit();
     // exit
   }
 
@@ -171,30 +175,38 @@ page_fault (struct intr_frame *f)
   if (kpage == NULL) {
     kill (f);
   }
+  memset(kpage, 0, PGSIZE);
   if (((*pte & PTE_SPT) >> 3) == 0) {
     writable = (*pte & PTE_ZW) != 0; 
+    if (!writable && write) {
+      palloc_free_page(kpage);
+      thread_exit();
+    }
     in_file = false;
-    memset(kpage, 0, PGSIZE);
   } else {
     struct spt *spt_elem = (struct spt *)(*pte & (~0x3));
     writable = spt_elem->writable;
+    if (!writable && write) {
+      palloc_free_page(kpage);
+      thread_exit();
+    }
     if(spt_elem->type == SPT_FILE) {
       // in file
       in_file = true;
       struct file *file = spt_elem->file;
       uint32_t ptr_offset = (uint32_t)pg_round_down(fault_addr) - (uint32_t)spt_elem->start_uaddr;
-      int size_to_read = spt_elem->nbytes - ptr_offset;
-      uint32_t offset = spt_elem->pos + ptr_offset;
+      uint32_t size_to_read = spt_elem->nbytes - ptr_offset;
+      if (size_to_read > PGSIZE)
+        size_to_read = PGSIZE;
+      uint32_t offset = spt_elem->offset + ptr_offset;
       file_seek(file, offset);
-      if (file_read(file, kpage, size_to_read) != size_to_read) {
+      if ((uint32_t)file_read(file, kpage, size_to_read) != size_to_read) {
         palloc_free_page(kpage);
         kill (f);
       }
     } else {
       in_file = false;
       swap_from_disk(kpage, spt_elem->pos);
-      list_remove(&spt_elem->elem);
-      free(spt_elem);
     }
   }
   if (!pagedir_set_page_for_page_fault(t->pagedir, pg_round_down(fault_addr), kpage, writable, in_file)) {

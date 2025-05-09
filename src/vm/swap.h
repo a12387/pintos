@@ -12,7 +12,8 @@ struct swaptable {
 
 void swap_init(void);
 // physical page here
-uint32_t swap_to_disk(uint32_t *page);
-void swap_from_disk(uint32_t *page, int pos); 
+uint32_t swap_to_disk(void *page);
+uint32_t swap_to_disk_at(void *page, int sector);
+void swap_from_disk(void *page, int pos); 
 
 #endif
