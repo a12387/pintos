@@ -164,10 +164,26 @@ page_fault (struct intr_frame *f)
 
   // no such page or not a lazy alloc page
   if (pte == NULL || (*pte & PTE_L) == 0) {
-    // should not use kill()
-    // maybe a syscall pagefault in kernel
-    // kill() will stop the kernel
-    thread_exit();
+    // check stack growth
+    ASSERT (t->esp != NULL);
+    if ((uint32_t)fault_addr < ((uint32_t)t->esp - 32)) {
+      // should not use kill()
+      // maybe a syscall pagefault in kernel
+      // kill() will stop the kernel
+      t->esp = NULL;
+      thread_exit();
+    } else {
+      void *kpage = palloc_get_page_for_page_fault();
+      if (kpage == NULL) {
+        kill (f);
+      }
+      memset(kpage, 0, PGSIZE);
+      if (!pagedir_set_page(t->pagedir, pg_round_down(fault_addr), kpage, true)) {
+        palloc_free_page(kpage);
+        kill (f);
+      }
+      return;
+    }
   }
 
   // pte != NULL && PTE_L set

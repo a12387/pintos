@@ -9,7 +9,7 @@
 #include "threads/thread.h"
 #include "threads/vaddr.h"
 #include "devices/timer.h"
-
+#include "userprog/exception.h"
 /** Programmable Interrupt Controller (PIC) registers.
    A PC has two PICs, called the master and slave PICs, with the
    slave attached ("cascaded") to the master IRQ line 2. */
@@ -347,6 +347,13 @@ intr_handler (struct intr_frame *frame)
   bool external;
   intr_handler_func *handler;
 
+  /* Set thread's esp ()*/
+  bool set = false;
+  if (frame->esp < PHYS_BASE && thread_current()->esp == NULL) {
+    set = true;
+    thread_current()->esp = frame->esp;
+  }
+
   /* External interrupts are special.
      We only handle one at a time (so interrupts must be off)
      and they need to be acknowledged on the PIC (see below).
@@ -373,6 +380,11 @@ intr_handler (struct intr_frame *frame)
     }
   else
     unexpected_interrupt (frame);
+
+  /* Set thread's esp back to NULL */
+  if (set) {
+    thread_current()->esp = NULL;
+  }
 
   /* Complete the processing of an external interrupt. */
   if (external) 

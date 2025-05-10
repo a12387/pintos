@@ -140,6 +140,7 @@ struct thread
     uint32_t *pagedir;                  /**< Page directory. */
 
     uint8_t *kbuffer;
+    uint8_t *esp;
     struct list spt;
 #endif
 

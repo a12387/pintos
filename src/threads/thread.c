@@ -679,6 +679,7 @@ init_thread (struct thread *t, const char *name, int priority)
   t->nice = 0;
   t->wake_tick = 0;
   t->kbuffer = NULL;
+  t->esp = NULL;
   list_init(&t->children);
   list_init(&t->spt);
   t->executable = NULL;
