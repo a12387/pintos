@@ -354,7 +354,7 @@ thread_exit (void)
 #ifdef USERPROG
   process_exit ();
   struct thread *t = thread_current();
-  // if (t->kbuffer != NULL) free(t->kbuffer);
+  if (t->kbuffer != NULL) free(t->kbuffer);
   for(int i = 0; i < NOFILE; i++) {
     if(t->open_file[i] != NULL) {
       file_close(t->open_file[i]);
