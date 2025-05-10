@@ -164,10 +164,27 @@ page_fault (struct intr_frame *f)
 
   // no such page or not a lazy alloc page
   if (pte == NULL || (*pte & PTE_L) == 0) {
-    // should not use kill()
-    // maybe a syscall pagefault in kernel
-    // kill() will stop the kernel
-    thread_exit();
+    // check stack growth
+    ASSERT (t->esp != NULL);
+    if ((uint32_t)fault_addr < ((uint32_t)t->esp - 32) || 
+      (uint32_t)fault_addr < ((uint32_t)PHYS_BASE - 8 * 1024 * 1024)) {
+      // should not use kill()
+      // maybe a syscall pagefault in kernel
+      // kill() will stop the kernel
+      t->esp = NULL;
+      thread_exit();
+    } else {
+      void *kpage = palloc_get_page_for_page_fault();
+      if (kpage == NULL) {
+        kill (f);
+      }
+      memset(kpage, 0, PGSIZE);
+      if (!pagedir_set_page(t->pagedir, pg_round_down(fault_addr), kpage, true)) {
+        palloc_free_page(kpage);
+        kill (f);
+      }
+      return;
+    }
   }
 
   // pte != NULL && PTE_L set
@@ -194,18 +211,20 @@ page_fault (struct intr_frame *f)
   
   // if zero_init, no more things to do
   if (!zero_init) {
-    if(spt_elem->type == SPT_FILE) {
+    if(spt_elem->type == SPT_FILE || spt_elem->type == SPT_MMAP) {
       struct file *file = spt_elem->file;
       uint32_t ptr_offset = (uint32_t)pg_round_down(fault_addr) - (uint32_t)spt_elem->start_uaddr;
       uint32_t size_to_read = spt_elem->nbytes - ptr_offset;
       if (size_to_read > PGSIZE)
         size_to_read = PGSIZE;
       uint32_t offset = spt_elem->offset + ptr_offset;
+      off_t old_ofs = file_tell(file);
       file_seek(file, offset);
       if ((uint32_t)file_read(file, kpage, size_to_read) != size_to_read) {
         palloc_free_page(kpage);
         kill (f);
       }
+      file_seek(file, old_ofs);
     } else {
       swap_from_disk(kpage, spt_elem->pos);
     }

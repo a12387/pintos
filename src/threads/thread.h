@@ -34,6 +34,7 @@ enum thread_status
 
   
 #define NOFILE 16
+#define NOMMAP 16
 /** Thread identifier type.
    You can redefine this to whatever type you like. */
 typedef int tid_t;
@@ -134,13 +135,18 @@ struct thread
     /* For wait and exit */
     struct list children;
     struct child_info *info;
-    struct file *open_file[NOFILE];
+    struct {
+      struct file *file;
+      int refcnt;
+    } open_file[NOFILE];
     struct file *executable;
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /**< Page directory. */
 
     uint8_t *kbuffer;
+    uint8_t *esp;
     struct list spt;
+    struct spt *mmap_file[NOMMAP];
 #endif
 
     /* Owned by thread.c. */

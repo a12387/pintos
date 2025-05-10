@@ -12,6 +12,8 @@
 #include "filesys/file.h"
 #include "devices/input.h"
 #include "lib/string.h"
+#include "threads/pte.h"
+#include "vm/spt.h"
 static void syscall_handler (struct intr_frame *);
 static bool
 is_valid_string(char *s)
@@ -73,6 +75,8 @@ int sys_write(struct intr_frame *);
 int sys_seek(struct intr_frame *);
 int sys_tell(struct intr_frame *);
 int sys_close(struct intr_frame *);
+int sys_mmap(struct intr_frame *);
+int sys_munmap(struct intr_frame *);
 
 static int (*syscalls[])(struct intr_frame *) = {
   [SYS_HALT]    sys_halt,
@@ -88,6 +92,8 @@ static int (*syscalls[])(struct intr_frame *) = {
   [SYS_SEEK]    sys_seek,
   [SYS_TELL]    sys_tell,
   [SYS_CLOSE]   sys_close,
+  [SYS_MMAP]    sys_mmap,
+  [SYS_MUNMAP]  sys_munmap,
 };
 
 void
@@ -187,8 +193,9 @@ sys_open(struct intr_frame *f)
   if(ret == NULL)
     return -1;
   for(int i = 0; i < NOFILE; i++) {
-    if(thread_current()->open_file[i] == NULL) {
-      thread_current()->open_file[i] = ret;
+    if(thread_current()->open_file[i].file == NULL) {
+      thread_current()->open_file[i].file = ret;
+      thread_current()->open_file[i].refcnt++;
       return i + 2; // 2 for stdin and stdout
     }
   }
@@ -202,7 +209,7 @@ sys_filesize(struct intr_frame *f)
   get_user(f->esp + 4, &fd, sizeof fd);
   fd -= 2;
   struct file *file;
-  if(fd < 0 || fd >= NOFILE || (file = thread_current()->open_file[fd]) == NULL) {
+  if(fd < 0 || fd >= NOFILE || (file = thread_current()->open_file[fd].file) == NULL) {
     return -1;
   }
   lock_acquire(&file_lock);
@@ -220,7 +227,7 @@ sys_read(struct intr_frame *f)
   struct file *file;
   get_user(f->esp + 4, &fd, sizeof fd);
   fd -= 2;
-  if((fd < 0 && fd + 2 != STDIN_FILENO) || fd >= NOFILE || (file = thread_current()->open_file[fd]) == NULL) {
+  if((fd < 0 && fd + 2 != STDIN_FILENO) || fd >= NOFILE || (fd >= 0 && (file = thread_current()->open_file[fd].file) == NULL)) {
     return -1;
   }
   get_user(f->esp + 4 + sizeof fd, &buffer, sizeof buffer);
@@ -270,7 +277,7 @@ sys_write(struct intr_frame *f)
   struct file *file;
   get_user(f->esp + 4, &fd, sizeof fd);
   fd -= 2;
-  if((fd < 0 && fd + 2 != STDOUT_FILENO) || fd >= NOFILE || (file = thread_current()->open_file[fd]) == NULL) {
+  if((fd < 0 && fd + 2 != STDOUT_FILENO) || fd >= NOFILE || (fd >= 0 && (file = thread_current()->open_file[fd].file) == NULL)) {
     return -1;
   }
   get_user(f->esp + 4 + sizeof fd, &buffer, sizeof buffer);
@@ -307,7 +314,7 @@ sys_seek(struct intr_frame *f)
   struct file *file;
   get_user(f->esp + 4, &fd, sizeof fd);
   fd -= 2;
-  if(fd < 0 || fd >= NOFILE || (file = thread_current()->open_file[fd]) == NULL) {
+  if(fd < 0 || fd >= NOFILE || (file = thread_current()->open_file[fd].file) == NULL) {
     return -1;
   }
 
@@ -325,7 +332,7 @@ sys_tell(struct intr_frame *f)
   struct file *file;
   get_user(f->esp + 4, &fd, sizeof fd);
   fd -= 2;
-  if(fd < 0 || fd >= NOFILE || (file = thread_current()->open_file[fd]) == NULL) {
+  if(fd < 0 || fd >= NOFILE || (file = thread_current()->open_file[fd].file) == NULL) {
     return -1;
   }
 
@@ -342,13 +349,114 @@ sys_close(struct intr_frame *f)
   struct file *file;
   get_user(f->esp + 4, &fd, sizeof fd);
   fd -= 2;
-  if(fd < 0 || fd >= NOFILE || (file = thread_current()->open_file[fd]) == NULL) {
+  if(fd < 0 || fd >= NOFILE || (file = thread_current()->open_file[fd].file) == NULL) {
     return -1;
   }
 
+  if((--thread_current()->open_file[fd].refcnt) == 0) {
+    lock_acquire(&file_lock);
+    file_close(file);
+    lock_release(&file_lock);
+    thread_current()->open_file[fd].file = NULL;
+  }
+  return 0;
+}
+
+int
+sys_mmap(struct intr_frame *f)
+{
+  int fd;
+  void *uaddr;
+  struct file *file;
+  struct thread *t = thread_current();
+  /* Pre-check */
+  get_user(f->esp + 4, &fd, sizeof fd);
+  fd -= 2;
+  if(fd < 0 || fd >= NOFILE || (file = t->open_file[fd].file) == NULL) {
+    return -1;
+  }
+  get_user(f->esp + 4 + sizeof fd, &uaddr, sizeof uaddr);
+  if (uaddr == NULL || (uint32_t)uaddr % PGSIZE != 0) {
+    return -1;
+  }
   lock_acquire(&file_lock);
-  file_close(file);
+  int file_size = file_length(file);
   lock_release(&file_lock);
-  thread_current()->open_file[fd] = NULL;
+  if (file_size == 0) {
+    return -1;
+  }
+
+  /* Check overlap */
+  int bytes = 0;
+  while (bytes < file_size) {
+    uint32_t *pte = lookup_page(t->pagedir, (uaddr + bytes), false);
+    if ((pte != NULL) && ((*pte & PTE_P) || (*pte & PTE_L))) {
+      /* P-bit set 
+       * or (P-bit not set and L-bit set) 
+       * there's an overlap */
+      return -1;
+    }
+    bytes += PGSIZE;
+  }
+
+  thread_current()->open_file[fd].refcnt++;
+
+  /* Select a mmap id */
+  int mmap_id;
+  for (mmap_id = 0; mmap_id < NOMMAP; mmap_id++) {
+    if (t->mmap_file[mmap_id] == NULL) {
+      break;
+    }
+  }
+  if (mmap_id == NOMMAP) {
+    PANIC("Set a larger NOMMAP!");
+  }
+
+  /* Create VMA */
+  struct spt *s = malloc(sizeof(struct spt));
+  ASSERT(s != NULL);
+  s->file = file;
+  s->offset = 0;
+  s->nbytes = file_size;
+  s->start_uaddr = uaddr;
+  s->type = SPT_MMAP;
+  s->writable = true;
+  list_push_back(&t->spt, &s->elem);
+  t->mmap_file[mmap_id] = s;
+
+  while(bytes > 0) {
+    pagedir_set_virtual_page(t->pagedir, uaddr, s, false);
+    bytes -= PGSIZE;
+    uaddr += PGSIZE;
+  }
+  return mmap_id;
+}
+
+int
+sys_munmap(struct intr_frame *f)
+{
+  int mmap_id;
+  struct spt *s;
+  struct thread *t = thread_current();
+  get_user(f->esp + 4, &mmap_id, sizeof mmap_id);
+  if (mmap_id >= NOMMAP || mmap_id < 0 || (s = t->mmap_file[mmap_id]) == NULL) {
+    return -1;
+  }
+
+  spt_free(s);
+  for (int i = 0; i < NOFILE; i++) {
+    if (t->open_file[i].file == s->file) {
+      t->open_file[i].refcnt--;
+      if (t->open_file[i].refcnt == 0) {
+        lock_acquire(&file_lock);
+        file_close(t->open_file[i].file);
+        lock_release(&file_lock);
+        t->open_file[i].file = NULL;
+      }
+    }
+  }
+  free(s);
+  t->mmap_file[mmap_id] = NULL;
+
   return 0;
 }

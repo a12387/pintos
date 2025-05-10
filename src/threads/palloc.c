@@ -195,10 +195,18 @@ palloc_get_page_for_page_fault ()
             found = false;
             s->nbytes -= size_to_write;
           }
-        }
-        // has swap backup
-        if (s->type == SPT_SWAP) {
+        } else if (s->type == SPT_SWAP) {
+          // has swap backup
           swap_to_disk_at(ppage, s->pos);
+        } else if (s->type == SPT_MMAP) {
+          int size_to_write = s->nbytes - ptr_ofs;
+          if (size_to_write >= PGSIZE) {
+            size_to_write = PGSIZE;
+          }
+          off_t old_ofs = file_tell(s->file);
+          file_seek(s->file, s->offset + ptr_ofs);
+          file_write(s->file, ppage, size_to_write);
+          file_seek(s->file, old_ofs);
         }
       }
       // no backup (or just evicted from file to swap)

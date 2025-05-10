@@ -182,10 +182,18 @@ pagedir_clear_page (uint32_t *pd, void *upage)
   ASSERT (is_user_vaddr (upage));
 
   pte = lookup_page (pd, upage, false);
-  if (pte != NULL && (*pte & PTE_P) != 0)
+  if (pte != NULL) 
     {
-      *pte &= ~PTE_P;
-      invalidate_pagedir (pd);
+      if ((*pte & PTE_P) != 0)
+        {
+          *pte &= ~PTE_P;
+          invalidate_pagedir (pd);
+        }
+      else if ((*pte & PTE_L) != 0)
+        {
+          *pte &= ~PTE_L;
+          invalidate_pagedir (pd);
+        }
     }
 }
 
