@@ -8,6 +8,7 @@
 enum spt_type {
   SPT_FILE = 1,
   SPT_SWAP = 2,
+  SPT_MMAP = 3
 };
 
 /** 
@@ -23,5 +24,7 @@ struct spt {
   bool writable;         
   struct list_elem elem; 
 };
+
+void spt_free(struct spt *s);
 
 #endif

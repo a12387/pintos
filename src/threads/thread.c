@@ -352,23 +352,26 @@ thread_exit (void)
 {
   ASSERT (!intr_context ());
 #ifdef USERPROG
-  process_exit ();
+  
   struct thread *t = thread_current();
-  // if (t->kbuffer != NULL) free(t->kbuffer);
-  for(int i = 0; i < NOFILE; i++) {
-    if(t->open_file[i] != NULL) {
-      file_close(t->open_file[i]);
-      t->open_file[i] = NULL;
-    }
-  }
   // free spt and swap space
   for (struct list_elem *e = list_begin(&t->spt); e != list_end(&t->spt);) {
     struct spt *s = list_entry(e, struct spt, elem);
     e = list_next(e);
     if(s->type == SPT_SWAP) {
       swap_free(s->pos);
+    } else if (s->type == SPT_MMAP) {
+      spt_free(s);
     }
     free(s);
+  }
+  
+  if (t->kbuffer != NULL) free(t->kbuffer);
+  for(int i = 0; i < NOFILE; i++) {
+    if(t->open_file[i].file != NULL) {
+      file_close(t->open_file[i].file);
+      t->open_file[i].file = NULL;
+    }
   }
   if(t->info->parent == NULL ) {
     // parent has exited
@@ -387,6 +390,7 @@ thread_exit (void)
       i->parent = NULL;
     }
   }
+  process_exit ();
 #endif
 
   /* Remove thread from all threads list, set our status to dying,
@@ -670,19 +674,10 @@ init_thread (struct thread *t, const char *name, int priority)
   t->status = THREAD_BLOCKED;
   strlcpy (t->name, name, sizeof t->name);
   t->stack = (uint8_t *) t + PGSIZE;
-  t->ready = false;
-  t->donate = 0;
   t->priority = priority;
   t->priority_restore = -1;
-  t->waiting = NULL;
-  t->recent_cpu = 0;
-  t->nice = 0;
-  t->wake_tick = 0;
-  t->kbuffer = NULL;
-  t->esp = NULL;
   list_init(&t->children);
   list_init(&t->spt);
-  t->executable = NULL;
   t->magic = THREAD_MAGIC;
 
   old_level = intr_disable ();
