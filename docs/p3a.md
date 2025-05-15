@@ -155,7 +155,9 @@ static struct lock ft_lock;
 >A5: Why did you choose the data structure(s) that you did for
 >representing virtual-to-physical mappings?
 
-<!-- 在TA Session中了解到P位为0的PTE也可以使用之后，就想要尝试通过这种方法来进行翻译。在需要换入对应页面时，这种方法查找比较迅速且占用较低，但是需要换出时就需要遍历SPT，所以整体上来看，就我个人的实现是不如使用哈希表的，但是改动成本比较高所以保留了。 -->
+在TA Session中了解到P位为0的PTE也可以使用之后，就想要尝试通过这种方法来进行翻译。在需要换入对应页面时，这种方法查找比较迅速且占用较低，但是需要换出时就需要遍历SPT，所以整体上来看，就我个人的实现是不如使用哈希表的，但是改动成本比较高所以保留了。
+
+在吸取教训之后，Frametable就老老实实采用哈希表了，对于这种映射关系，我认为哈希表无疑是十分适合的数据结构
 
 
 ## Paging To And From Disk
